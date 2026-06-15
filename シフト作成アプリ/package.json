@@ -1,8 +1,0 @@
-{
-  "name": "shift-scheduler",
-  "type": "module",
-  "private": true,
-  "scripts": {
-    "start": "npx --yes serve . -p 3456"
-  }
-}
