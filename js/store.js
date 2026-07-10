@@ -1,7 +1,7 @@
 const STORAGE_KEY = "shift-app-v1";
 
 /** 画面右下に表示。更新後にここが変わっていれば最新版です */
-export const APP_VERSION = "1.3.0";
+export const APP_VERSION = "1.3.1";
 
 function emptyDefaults() {
   return {
@@ -68,7 +68,9 @@ export function migrateLoadedState(state) {
 
   for (const sg of state.subGroups) {
     if (!state.subGroupConstraints[sg.id]) {
-      state.subGroupConstraints[sg.id] = { min: 0, max: 99 };
+      state.subGroupConstraints[sg.id] = { min: 0, max: 99, useConferenceDay: false };
+    } else if (state.subGroupConstraints[sg.id].useConferenceDay == null) {
+      state.subGroupConstraints[sg.id].useConferenceDay = false;
     }
   }
 

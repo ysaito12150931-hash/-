@@ -8,7 +8,14 @@ import {
   normalizePreferences,
   formatPreferencePreview,
 } from "./excel.js";
-import { generateShift, formatCellDisplay, getConferenceTeamsOnDay, isConferenceDayForTeam } from "./scheduler.js";
+import {
+  generateShift,
+  formatCellDisplay,
+  getConferenceTeamsOnDay,
+  getConferenceSubGroupsOnDay,
+  isConferenceDayForWorker,
+  normalizeConferenceDays,
+} from "./scheduler.js";
 
 let state = loadState();
 state.preferences = normalizePreferences(state.preferences);
@@ -154,7 +161,7 @@ function bindTeams() {
     }
     const id = crypto.randomUUID();
     state.subGroups.push({ id, name, teamId });
-    state.subGroupConstraints[id] = { min: 0, max: 99 };
+    state.subGroupConstraints[id] = { min: 0, max: 99, useConferenceDay: false };
     $("#new-subgroup-name").value = "";
     renderTeams();
     renderWorkers();
@@ -175,7 +182,10 @@ function ensureTeamConstraint(teamId) {
 
 function ensureSubGroupConstraint(subGroupId) {
   if (!state.subGroupConstraints[subGroupId]) {
-    state.subGroupConstraints[subGroupId] = { min: 0, max: 99 };
+    state.subGroupConstraints[subGroupId] = { min: 0, max: 99, useConferenceDay: false };
+  }
+  if (state.subGroupConstraints[subGroupId].useConferenceDay == null) {
+    state.subGroupConstraints[subGroupId].useConferenceDay = false;
   }
   return state.subGroupConstraints[subGroupId];
 }
@@ -859,6 +869,17 @@ function renderSubGroups() {
     });
     maxTd.appendChild(maxInput);
 
+    const confTd = document.createElement("td");
+    const confChk = document.createElement("input");
+    confChk.type = "checkbox";
+    confChk.checked = Boolean(sgc.useConferenceDay);
+    confChk.title = "週1日、サブグループ出勤が最も多い日をカンファレンス日にする";
+    confChk.addEventListener("change", () => {
+      sgc.useConferenceDay = confChk.checked;
+      persist();
+    });
+    confTd.appendChild(confChk);
+
     const actTd = document.createElement("td");
     const delBtn = document.createElement("button");
     delBtn.type = "button";
@@ -878,7 +899,7 @@ function renderSubGroups() {
     });
     actTd.appendChild(delBtn);
 
-    tr.append(teamTd, nameTd, membersTd, minTd, maxTd, actTd);
+    tr.append(teamTd, nameTd, membersTd, minTd, maxTd, confTd, actTd);
     tbody.appendChild(tr);
   });
 }
@@ -938,7 +959,9 @@ function renderPreferencePreview() {
 }
 
 function renderShiftResult(result) {
-  const { year, month, assignments, workers, stats, conferenceDays = {}, teams = state.teams } = result;
+  const { year, month, assignments, workers, stats, conferenceDays: rawConf = {}, teams = state.teams } = result;
+  const conferenceDays = normalizeConferenceDays(rawConf);
+  const subGroups = state.subGroups ?? [];
   const days = getDaysInMonth(year, month);
   const useTypes = state.useShiftTypes;
   const root = $("#shift-print-root");
@@ -961,13 +984,27 @@ function renderShiftResult(result) {
   teams.forEach((team) => {
     const tc = state.teamConstraints[team.id];
     if (!tc?.useConferenceDay) return;
-    const entries = conferenceDays[team.id] || [];
+    const entries = conferenceDays.teams[team.id] || [];
     if (!entries.length) {
       summaryHtml += `<div class="card-stat conference-card">${escapeHtml(team.name)}: カンファレンス日なし</div>`;
       return;
     }
     const list = entries.map((e) => `${e.day}日(${e.count}名)`).join("、");
     summaryHtml += `<div class="card-stat conference-card"><strong>${escapeHtml(team.name)}</strong> 会: ${escapeHtml(list)}</div>`;
+  });
+
+  subGroups.forEach((sg) => {
+    const sgc = state.subGroupConstraints[sg.id];
+    if (!sgc?.useConferenceDay) return;
+    const team = teams.find((t) => t.id === sg.teamId);
+    const label = team ? `${team.name} / ${sg.name}` : sg.name;
+    const entries = conferenceDays.subGroups[sg.id] || [];
+    if (!entries.length) {
+      summaryHtml += `<div class="card-stat conference-card">${escapeHtml(label)}: カンファレンス日なし</div>`;
+      return;
+    }
+    const list = entries.map((e) => `${e.day}日(${e.count}名)`).join("、");
+    summaryHtml += `<div class="card-stat conference-card"><strong>${escapeHtml(label)}</strong> 会: ${escapeHtml(list)}</div>`;
   });
 
   summary.innerHTML = summaryHtml;
@@ -977,11 +1014,19 @@ function renderShiftResult(result) {
   for (let d = 1; d <= days; d++) {
     const dow = ["日", "月", "火", "水", "木", "金", "土"][new Date(year, month - 1, d).getDay()];
     const confTeams = getConferenceTeamsOnDay(conferenceDays, teams, d);
-    const thCls = confTeams.length ? "th-conference" : "";
-    const confHint = confTeams.length
-      ? ` title="${escapeHtml(confTeams.map((t) => t.name).join("・"))} カンファレンス日"`
+    const confSubGroups = getConferenceSubGroupsOnDay(conferenceDays, subGroups, d);
+    const confLabels = [
+      ...confTeams.map((t) => t.name),
+      ...confSubGroups.map((sg) => {
+        const team = teams.find((t) => t.id === sg.teamId);
+        return team ? `${team.name}/${sg.name}` : sg.name;
+      }),
+    ];
+    const thCls = confLabels.length ? "th-conference" : "";
+    const confHint = confLabels.length
+      ? ` title="${escapeHtml(confLabels.join("・"))} カンファレンス日"`
       : "";
-    const confBadge = confTeams.length ? '<br><small class="conf-badge">会</small>' : "";
+    const confBadge = confLabels.length ? '<br><small class="conf-badge">会</small>' : "";
     html += `<th class="${thCls}"${confHint}>${d}<br><small>${dow}</small>${confBadge}</th>`;
   }
   html += "</tr></thead><tbody>";
@@ -994,7 +1039,7 @@ function renderShiftResult(result) {
     for (let d = 1; d <= days; d++) {
       const cell = assignments[w.id][d];
       let label = formatCellDisplay(cell, useTypes);
-      const isConf = isConferenceDayForTeam(conferenceDays, w.teamId, d);
+      const isConf = isConferenceDayForWorker(conferenceDays, w, d);
       let cls = "cell-off";
       if (cell?.type === "half-off") {
         cls = cell.half === "am" ? "cell-half-am" : "cell-half-pm";

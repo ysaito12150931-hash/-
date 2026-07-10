@@ -97,6 +97,8 @@ export function generateShift(state) {
     workers,
     teams,
     teamConstraints,
+    subGroups,
+    subGroupConstraints,
     year,
     month
   );
@@ -504,59 +506,110 @@ function getWeekKey(year, month, day) {
 }
 
 /**
- * チームごとに週1日、出勤人数が最多の日をカンファレンス日とする
- * @returns {Record<string, { day: number, count: number, weekKey: string }[]>}
+ * グループごとに週1日、出勤人数が最多の日をカンファレンス日とする
+ * @returns {{ teams: Record<string, { day: number, count: number, weekKey: string }[]>, subGroups: Record<string, { day: number, count: number, weekKey: string }[]> }}
  */
-export function computeConferenceDays(assignments, workers, teams, teamConstraints, year, month) {
+export function normalizeConferenceDays(conferenceDays) {
+  if (conferenceDays?.teams || conferenceDays?.subGroups) {
+    return {
+      teams: conferenceDays.teams || {},
+      subGroups: conferenceDays.subGroups || {},
+    };
+  }
+  return { teams: conferenceDays || {}, subGroups: {} };
+}
+
+function pickWeeklyConferenceDays(members, assignments, year, month) {
   const days = getDaysInMonth(year, month);
-  const result = {};
+  if (!members.length) return [];
+
+  const weekToDays = new Map();
+  for (let d = 1; d <= days; d++) {
+    const wk = getWeekKey(year, month, d);
+    if (!weekToDays.has(wk)) weekToDays.set(wk, []);
+    weekToDays.get(wk).push(d);
+  }
+
+  const picked = [];
+  for (const [weekKey, daysInWeek] of weekToDays) {
+    let bestDay = null;
+    let bestCount = -1;
+    for (const d of daysInWeek) {
+      const count = members.filter((m) => {
+        const c = assignments[m.id][d];
+        return c && c.type !== "off";
+      }).length;
+      if (count > bestCount || (count === bestCount && bestDay != null && d < bestDay)) {
+        bestCount = count;
+        bestDay = d;
+      }
+    }
+    if (bestDay != null && bestCount > 0) {
+      picked.push({ weekKey, day: bestDay, count: bestCount });
+    }
+  }
+  picked.sort((a, b) => a.day - b.day);
+  return picked;
+}
+
+export function computeConferenceDays(
+  assignments,
+  workers,
+  teams,
+  teamConstraints,
+  subGroups = [],
+  subGroupConstraints = {},
+  year,
+  month
+) {
+  const result = { teams: {}, subGroups: {} };
 
   for (const team of teams) {
     const tc = teamConstraints[team.id];
     if (!tc?.useConferenceDay) continue;
-
     const members = workers.filter((w) => w.teamId === team.id);
-    if (!members.length) continue;
+    const picked = pickWeeklyConferenceDays(members, assignments, year, month);
+    if (picked.length) result.teams[team.id] = picked;
+  }
 
-    const weekToDays = new Map();
-    for (let d = 1; d <= days; d++) {
-      const wk = getWeekKey(year, month, d);
-      if (!weekToDays.has(wk)) weekToDays.set(wk, []);
-      weekToDays.get(wk).push(d);
-    }
-
-    const picked = [];
-    for (const [weekKey, daysInWeek] of weekToDays) {
-      let bestDay = null;
-      let bestCount = -1;
-      for (const d of daysInWeek) {
-        const count = members.filter((m) => {
-          const c = assignments[m.id][d];
-          return c && c.type !== "off";
-        }).length;
-        if (count > bestCount || (count === bestCount && bestDay != null && d < bestDay)) {
-          bestCount = count;
-          bestDay = d;
-        }
-      }
-      if (bestDay != null && bestCount > 0) {
-        picked.push({ weekKey, day: bestDay, count: bestCount });
-      }
-    }
-    picked.sort((a, b) => a.day - b.day);
-    result[team.id] = picked;
+  for (const sg of subGroups) {
+    const sgc = subGroupConstraints[sg.id];
+    if (!sgc?.useConferenceDay) continue;
+    const members = workers.filter((w) => w.subGroupId === sg.id);
+    const picked = pickWeeklyConferenceDays(members, assignments, year, month);
+    if (picked.length) result.subGroups[sg.id] = picked;
   }
 
   return result;
 }
 
 export function isConferenceDayForTeam(conferenceDays, teamId, day) {
-  if (!teamId || !conferenceDays?.[teamId]) return false;
-  return conferenceDays[teamId].some((e) => e.day === day);
+  if (!teamId) return false;
+  const cd = normalizeConferenceDays(conferenceDays);
+  return cd.teams[teamId]?.some((e) => e.day === day) ?? false;
+}
+
+export function isConferenceDayForSubGroup(conferenceDays, subGroupId, day) {
+  if (!subGroupId) return false;
+  const cd = normalizeConferenceDays(conferenceDays);
+  return cd.subGroups[subGroupId]?.some((e) => e.day === day) ?? false;
+}
+
+export function isConferenceDayForWorker(conferenceDays, worker, day) {
+  return (
+    isConferenceDayForTeam(conferenceDays, worker.teamId, day) ||
+    isConferenceDayForSubGroup(conferenceDays, worker.subGroupId, day)
+  );
 }
 
 export function getConferenceTeamsOnDay(conferenceDays, teams, day) {
-  return teams.filter((t) => isConferenceDayForTeam(conferenceDays, t.id, day));
+  const cd = normalizeConferenceDays(conferenceDays);
+  return teams.filter((t) => cd.teams[t.id]?.some((e) => e.day === day));
+}
+
+export function getConferenceSubGroupsOnDay(conferenceDays, subGroups, day) {
+  const cd = normalizeConferenceDays(conferenceDays);
+  return subGroups.filter((sg) => cd.subGroups[sg.id]?.some((e) => e.day === day));
 }
 
 function randomInt(min, max, rng) {
