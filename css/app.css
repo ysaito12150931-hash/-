@@ -494,9 +494,30 @@ select.team-select {
 }
 
 .cell-conference {
-  background: #d1fae5;
   font-weight: 700;
-  color: #065f46;
+}
+
+.shift-conf-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.conf-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.conf-legend-swatch {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 4px;
+  border: 2px solid;
 }
 
 .shift-total-row td {
@@ -532,10 +553,9 @@ select.team-select {
 
 .conf-badge {
   display: inline-block;
-  margin-top: 0.1rem;
+  margin: 0.1rem 0.05rem 0;
   padding: 0 0.25rem;
   border-radius: 4px;
-  background: #059669;
   color: #fff;
   font-weight: 700;
   font-size: 0.65rem;
@@ -546,13 +566,35 @@ select.team-select {
   background: #ecfdf5;
 }
 
-.legend-conference {
+.legend-conference-note {
   display: inline-block;
   margin-left: 0.75rem;
   padding: 0 0.35rem;
   border-radius: 4px;
-  background: #059669;
+  background: #64748b;
   color: #fff;
+  font-weight: 700;
+  font-size: 0.75rem;
+}
+
+.legend-half-am {
+  display: inline-block;
+  margin-left: 0.75rem;
+  padding: 0 0.35rem;
+  border-radius: 4px;
+  background: #fef3c7;
+  color: #92400e;
+  font-weight: 700;
+  font-size: 0.75rem;
+}
+
+.legend-half-pm {
+  display: inline-block;
+  margin-left: 0.25rem;
+  padding: 0 0.35rem;
+  border-radius: 4px;
+  background: #ede9fe;
+  color: #5b21b6;
   font-weight: 700;
   font-size: 0.75rem;
 }

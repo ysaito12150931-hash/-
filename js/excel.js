@@ -248,7 +248,7 @@ function formatCellExport(cell, useShiftTypes) {
   if (!cell || cell.type === "off") return "休";
   if (cell.type === "half-off") return cell.half === "am" ? "午前休" : "午後休";
   if (useShiftTypes && cell.shiftType) return cell.shiftType;
-  return "出勤";
+  return "１";
 }
 
 export function downloadWorkbook(wb, filename) {

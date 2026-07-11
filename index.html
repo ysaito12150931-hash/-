@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>シフト作成アプリ</title>
-  <link rel="stylesheet" href="css/app.css?v=1.5.2" />
+  <link rel="stylesheet" href="css/app.css?v=1.5.4" />
   <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 </head>
 <body>
@@ -244,9 +244,11 @@
         <div id="shift-table-wrap" class="table-wrap shift-table-wrap"></div>
         <p class="shift-print-legend">
           <span class="legend-supervisor">★</span> 責任者
-          <span class="legend-work">出</span> 出勤
+          <span class="legend-work">１</span> 出勤
           <span class="legend-off">休</span> 休み
-          <span class="legend-conference">会</span> カンファレンス日
+          <span class="legend-half-am">AM</span> 前休
+          <span class="legend-half-pm">PM</span> 後休
+          <span class="legend-conference-note">会</span> カンファレンス（グループごとに色分け）
         </p>
       </div>
     </section>
@@ -256,6 +258,6 @@
     <p>データはこのブラウザのローカルストレージに保存されます。</p>
   </footer>
 
-  <script type="module" src="js/app.js?v=1.5.2"></script>
+  <script type="module" src="js/app.js?v=1.5.4"></script>
 </body>
 </html>

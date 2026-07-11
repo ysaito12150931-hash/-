@@ -1,6 +1,19 @@
 import { getDaysInMonth } from "./store.js";
 
 const MAX_ATTEMPTS = 500;
+const MAX_AUTO_OFF_CONSECUTIVE = 3;
+const CONFERENCE_SESSIONS_PER_MONTH = 4;
+
+export const CONFERENCE_COLORS = [
+  { bg: "#dbeafe", color: "#1e40af", border: "#93c5fd" },
+  { bg: "#fce7f3", color: "#9d174d", border: "#f9a8d4" },
+  { bg: "#fef3c7", color: "#92400e", border: "#fcd34d" },
+  { bg: "#d1fae5", color: "#065f46", border: "#6ee7b7" },
+  { bg: "#ede9fe", color: "#5b21b6", border: "#c4b5fd" },
+  { bg: "#ffedd5", color: "#9a3412", border: "#fdba74" },
+  { bg: "#e0e7ff", color: "#3730a3", border: "#a5b4fc" },
+  { bg: "#ccfbf1", color: "#115e59", border: "#5eead4" },
+];
 
 /**
  * @returns {{ ok: boolean, assignments?: object, messages: string[], stats?: object, year?: number, month?: number, workers?: object[] }}
@@ -57,7 +70,7 @@ export function generateShift(state) {
     const target = w.monthlyOffDays ?? 0;
     if (isOffTargetFixedByPreferences(w, days, lockedOff, halfOff, target)) {
       const row = buildFixedWorkerRow(w, days, lockedOff, lockedWork, halfOff);
-      if (violatesConsecutiveWork(row, days, maxConsecutiveWork)) {
+      if (violatesWorkerStreaks(row, days, lockedOff, w.id, maxConsecutiveWork)) {
         messages.push(
           `${w.name}: Excel希望休が月間休み日数（${formatOffDays(target)}日）と一致するため残りは全出勤になりますが、連勤上限（${maxConsecutiveWork}日）を超えます。休み希望の日を分散するか、月間休み日数・連勤上限を見直してください。`
         );
@@ -91,7 +104,7 @@ export function generateShift(state) {
         seed,
       });
       if (!grid) continue;
-      const score = scoreSchedule(grid, workers, days, preferences, requireSupervisor);
+      const score = scoreSchedule(grid, workers, days, preferences, requireSupervisor, lockedOff);
       if (score > bestScore) {
         bestScore = score;
         best = grid;
@@ -263,6 +276,11 @@ function offCandidateDays(row, days, w, lockedOff, lockedWork, halfOff) {
   const candidates = [];
   for (let d = 1; d <= days; d++) {
     if (!canAssignOffOnDay(w, d, lockedOff, lockedWork, halfOff) || !row[d]) continue;
+    const prev = row[d];
+    row[d] = false;
+    const autoOffOk = !violatesConsecutiveAutoOff(row, days, lockedOff, w.id);
+    row[d] = prev;
+    if (!autoOffOk) continue;
     let left = 0;
     let right = 0;
     for (let i = d - 1; i >= 1 && row[i]; i--) left++;
@@ -348,7 +366,7 @@ function seedWorkerOffDays(grid, w, days, targetOff, lockedOff, lockedWork, half
   }
 
   let guard = 0;
-  while (violatesConsecutiveWork(grid[w.id], days, maxConsecutive) && guard < days * 2) {
+  while (violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) && guard < days * 2) {
     guard++;
     const streak = findLongestWorkStreak(grid[w.id], days);
     if (streak.len <= maxConsecutive) break;
@@ -372,7 +390,7 @@ function seedWorkerOffDays(grid, w, days, targetOff, lockedOff, lockedWork, half
     let removed = false;
     for (const d of candidates) {
       grid[w.id][d] = true;
-      if (!violatesConsecutiveWork(grid[w.id], days, maxConsecutive)) {
+      if (!violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive)) {
         removed = true;
         break;
       }
@@ -397,7 +415,7 @@ function spreadAdditionalOffDays(grid, w, days, neededOff, lockedOff, lockedWork
   }
 
   let guard = 0;
-  while (violatesConsecutiveWork(grid[w.id], days, maxConsecutive) && guard < days * 2) {
+  while (violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) && guard < days * 2) {
     guard++;
     const streak = findLongestWorkStreak(grid[w.id], days);
     if (streak.len <= maxConsecutive) break;
@@ -421,8 +439,8 @@ function trySwapForOff(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecu
       grid[w.id][d] = false;
       grid[w2.id][d] = true;
       if (
-        !violatesConsecutiveWork(grid[w.id], days, maxConsecutive) &&
-        !violatesConsecutiveWork(grid[w2.id], days, maxConsecutive) &&
+        !violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) &&
+        !violatesWorkerStreaks(grid[w2.id], days, lockedOff, w2.id, maxConsecutive) &&
         validateDay(grid, workers, d, groupCtx, requireSupervisor).ok
       ) {
         return true;
@@ -443,8 +461,8 @@ function trySwapForWork(grid, w, days, lockedOff, lockedWork, halfOff, maxConsec
       grid[w.id][d] = true;
       grid[w2.id][d] = false;
       if (
-        !violatesConsecutiveWork(grid[w.id], days, maxConsecutive) &&
-        !violatesConsecutiveWork(grid[w2.id], days, maxConsecutive) &&
+        !violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) &&
+        !violatesWorkerStreaks(grid[w2.id], days, lockedOff, w2.id, maxConsecutive) &&
         validateDay(grid, workers, d, groupCtx, requireSupervisor).ok
       ) {
         return true;
@@ -514,7 +532,7 @@ function collectScheduleHints(workers, days, lockedOff, lockedWork, halfOff, con
     }
     if (isOffTargetFixedByPreferences(w, days, lockedOff, halfOff, target)) {
       const row = buildFixedWorkerRow(w, days, lockedOff, lockedWork, halfOff);
-      if (violatesConsecutiveWork(row, days, maxConsecutiveWork)) {
+      if (violatesWorkerStreaks(row, days, lockedOff, w.id, maxConsecutiveWork)) {
         hints.push(
           `${w.name}: Excel希望休が月間休み日数（${formatOffDays(target)}日）と一致するため残りは全出勤になりますが、連勤上限（${maxConsecutiveWork}日）を超えます。`
         );
@@ -645,7 +663,7 @@ function tryBuildSchedule(ctx) {
   }
 
   for (const w of workers) {
-    if (violatesConsecutiveWork(grid[w.id], days, maxConsecutiveWork)) return null;
+    if (violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutiveWork)) return null;
   }
 
   return grid;
@@ -703,7 +721,7 @@ function tryAddOff(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive
     if (halfOff[w.id]?.[d]) continue;
     if (!grid[w.id][d]) continue;
     grid[w.id][d] = false;
-    if (violatesConsecutiveWork(grid[w.id], days, maxConsecutive)) {
+    if (violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive)) {
       grid[w.id][d] = true;
       continue;
     }
@@ -736,7 +754,7 @@ function repairDay(grid, workers, day, days, lockedOff, lockedWork, halfOff, max
     )) {
       grid[w.id][day] = false;
       if (
-        !violatesConsecutiveWork(grid[w.id], days, maxConsecutive) &&
+        !violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) &&
         validateDay(grid, workers, day, groupCtx, requireSupervisor).ok
       ) {
         return true;
@@ -759,7 +777,7 @@ function repairDay(grid, workers, day, days, lockedOff, lockedWork, halfOff, max
     )) {
       grid[w.id][day] = true;
       if (
-        !violatesConsecutiveWork(grid[w.id], days, maxConsecutive) &&
+        !violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) &&
         validateDay(grid, workers, day, groupCtx, requireSupervisor).ok
       ) {
         return true;
@@ -778,7 +796,7 @@ function repairDay(grid, workers, day, days, lockedOff, lockedWork, halfOff, max
     for (const w of working) {
       grid[w.id][day] = false;
       if (
-        !violatesConsecutiveWork(grid[w.id], days, maxConsecutive) &&
+        !violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) &&
         validateDay(grid, workers, day, groupCtx, requireSupervisor).ok
       ) {
         return true;
@@ -793,7 +811,7 @@ function repairDay(grid, workers, day, days, lockedOff, lockedWork, halfOff, max
     for (const w of offPool) {
       grid[w.id][day] = true;
       if (
-        !violatesConsecutiveWork(grid[w.id], days, maxConsecutive) &&
+        !violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) &&
         validateDay(grid, workers, day, groupCtx, requireSupervisor).ok
       ) {
         return true;
@@ -813,7 +831,7 @@ function tryAddWork(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutiv
     if (lockedOff[w.id]?.[d]) continue;
     if (grid[w.id][d]) continue;
     grid[w.id][d] = true;
-    if (violatesConsecutiveWork(grid[w.id], days, maxConsecutive)) {
+    if (violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive)) {
       grid[w.id][d] = false;
       continue;
     }
@@ -861,6 +879,30 @@ function validateDay(grid, workers, day, groupCtx, requireSupervisor) {
   return { ok: true };
 }
 
+function violatesConsecutiveAutoOff(row, days, lockedOff, workerId, maxAutoOff = MAX_AUTO_OFF_CONSECUTIVE) {
+  let autoStreak = 0;
+  for (let d = 1; d <= days; d++) {
+    if (!row[d]) {
+      if (lockedOff[workerId]?.[d]) {
+        autoStreak = 0;
+      } else {
+        autoStreak++;
+        if (autoStreak > maxAutoOff) return true;
+      }
+    } else {
+      autoStreak = 0;
+    }
+  }
+  return false;
+}
+
+function violatesWorkerStreaks(row, days, lockedOff, workerId, maxConsecutiveWork) {
+  return (
+    violatesConsecutiveWork(row, days, maxConsecutiveWork) ||
+    violatesConsecutiveAutoOff(row, days, lockedOff, workerId)
+  );
+}
+
 function violatesConsecutiveWork(row, days, maxConsecutive) {
   let streak = 0;
   for (let d = 1; d <= days; d++) {
@@ -904,7 +946,7 @@ function gridToAssignments(grid, workers, days, halfOff) {
   return assignments;
 }
 
-function scoreSchedule(grid, workers, days, preferences, requireSupervisor) {
+function scoreSchedule(grid, workers, days, preferences, requireSupervisor, lockedOff) {
   let score = 0;
   for (const w of workers) {
     const pref = preferences[w.name] || {};
@@ -922,6 +964,12 @@ function scoreSchedule(grid, workers, days, preferences, requireSupervisor) {
         if (grid[w.id][d]) score += 8;
         if (!grid[w.id][d]) score -= 16;
       }
+    }
+    const streak = findLongestWorkStreak(grid[w.id], days);
+    score -= streak.len;
+    if (streak.len >= 4) score -= (streak.len - 3) * 3;
+    if (violatesConsecutiveAutoOff(grid[w.id], days, lockedOff, w.id)) {
+      score -= 100;
     }
   }
   for (let d = 1; d <= days; d++) {
@@ -956,7 +1004,7 @@ function getWeekKey(year, month, day) {
 }
 
 /**
- * グループごとに週1日、出勤人数が最多の日をカンファレンス日とする
+ * グループごとに月4回（隔週優先）、参加者が多い日をカンファレンス日とする
  * @returns {{ teams: Record<string, { day: number, count: number, weekKey: string }[]>, subGroups: Record<string, { day: number, count: number, weekKey: string }[]> }}
  */
 export function normalizeConferenceDays(conferenceDays) {
@@ -969,7 +1017,44 @@ export function normalizeConferenceDays(conferenceDays) {
   return { teams: conferenceDays || {}, subGroups: {} };
 }
 
-function pickWeeklyConferenceDays(members, assignments, year, month) {
+function countAttendingMembers(members, assignments, day) {
+  return members.filter((m) => {
+    const c = assignments[m.id][day];
+    return c && c.type !== "off";
+  }).length;
+}
+
+function combinations(arr, k) {
+  const result = [];
+  function pick(start, combo) {
+    if (combo.length === k) {
+      result.push([...combo]);
+      return;
+    }
+    for (let i = start; i <= arr.length - (k - combo.length); i++) {
+      combo.push(arr[i]);
+      pick(i + 1, combo);
+      combo.pop();
+    }
+  }
+  pick(0, []);
+  return result;
+}
+
+function scoreConferencePick(picked) {
+  if (!picked.length) return -Infinity;
+  let score = picked.reduce((s, p) => s + p.count * 1000, 0);
+  const ordered = [...picked].sort((a, b) => a.weekIndex - b.weekIndex);
+  for (let i = 1; i < ordered.length; i++) {
+    const gap = ordered[i].weekIndex - ordered[i - 1].weekIndex;
+    if (gap === 2) score += 100;
+    else if (gap === 1) score -= 50;
+    else if (gap >= 3) score += 20;
+  }
+  return score;
+}
+
+function pickMonthlyConferenceDays(members, assignments, year, month, maxSessions = CONFERENCE_SESSIONS_PER_MONTH) {
   const days = getDaysInMonth(year, month);
   if (!members.length) return [];
 
@@ -980,26 +1065,50 @@ function pickWeeklyConferenceDays(members, assignments, year, month) {
     weekToDays.get(wk).push(d);
   }
 
-  const picked = [];
-  for (const [weekKey, daysInWeek] of weekToDays) {
+  const weekKeys = [...weekToDays.keys()].sort(
+    (a, b) => weekToDays.get(a)[0] - weekToDays.get(b)[0]
+  );
+
+  const weekCandidates = [];
+  for (let wi = 0; wi < weekKeys.length; wi++) {
+    const weekKey = weekKeys[wi];
+    const daysInWeek = weekToDays.get(weekKey);
     let bestDay = null;
     let bestCount = -1;
     for (const d of daysInWeek) {
-      const count = members.filter((m) => {
-        const c = assignments[m.id][d];
-        return c && c.type !== "off";
-      }).length;
-      if (count > bestCount || (count === bestCount && bestDay != null && d < bestDay)) {
+      const count = countAttendingMembers(members, assignments, d);
+      if (count > bestCount || (count === bestCount && (bestDay == null || d < bestDay))) {
         bestCount = count;
         bestDay = d;
       }
     }
     if (bestDay != null && bestCount > 0) {
-      picked.push({ weekKey, day: bestDay, count: bestCount });
+      weekCandidates.push({ weekKey, weekIndex: wi, day: bestDay, count: bestCount });
     }
   }
-  picked.sort((a, b) => a.day - b.day);
-  return picked;
+
+  if (!weekCandidates.length) return [];
+
+  const target = Math.min(maxSessions, weekCandidates.length);
+  let bestPick = weekCandidates.slice(0, target);
+
+  if (weekCandidates.length > target) {
+    let bestScore = scoreConferencePick(bestPick);
+    for (const combo of combinations(weekCandidates, target)) {
+      const score = scoreConferencePick(combo);
+      if (score > bestScore) {
+        bestScore = score;
+        bestPick = combo;
+      }
+    }
+  }
+
+  bestPick.sort((a, b) => a.day - b.day);
+  return bestPick.map(({ weekKey, day, count }) => ({ weekKey, day, count }));
+}
+
+function pickWeeklyConferenceDays(members, assignments, year, month) {
+  return pickMonthlyConferenceDays(members, assignments, year, month);
 }
 
 export function computeConferenceDays(
@@ -1045,11 +1154,41 @@ export function isConferenceDayForSubGroup(conferenceDays, subGroupId, day) {
   return cd.subGroups[subGroupId]?.some((e) => e.day === day) ?? false;
 }
 
+export function buildConferenceColorMap(teams, subGroups, teamConstraints, subGroupConstraints) {
+  const map = new Map();
+  let idx = 0;
+  for (const team of teams) {
+    if (teamConstraints[team.id]?.useConferenceDay) {
+      map.set(`team:${team.id}`, idx++ % CONFERENCE_COLORS.length);
+    }
+  }
+  for (const sg of subGroups) {
+    if (subGroupConstraints[sg.id]?.useConferenceDay) {
+      map.set(`subGroup:${sg.id}`, idx++ % CONFERENCE_COLORS.length);
+    }
+  }
+  return map;
+}
+
+export function getConferenceGroupStyle(colorMap, type, id) {
+  const idx = colorMap.get(`${type}:${id}`);
+  if (idx == null) return null;
+  return CONFERENCE_COLORS[idx];
+}
+
+export function getWorkerConferenceGroup(conferenceDays, worker, day) {
+  const cd = normalizeConferenceDays(conferenceDays);
+  if (worker.subGroupId && cd.subGroups[worker.subGroupId]?.some((e) => e.day === day)) {
+    return { type: "subGroup", id: worker.subGroupId };
+  }
+  if (worker.teamId && cd.teams[worker.teamId]?.some((e) => e.day === day)) {
+    return { type: "team", id: worker.teamId };
+  }
+  return null;
+}
+
 export function isConferenceDayForWorker(conferenceDays, worker, day) {
-  return (
-    isConferenceDayForTeam(conferenceDays, worker.teamId, day) ||
-    isConferenceDayForSubGroup(conferenceDays, worker.subGroupId, day)
-  );
+  return Boolean(getWorkerConferenceGroup(conferenceDays, worker, day));
 }
 
 export function getConferenceTeamsOnDay(conferenceDays, teams, day) {
@@ -1098,9 +1237,9 @@ function shuffleInPlace(arr, rng) {
 
 export function formatCellDisplay(cell, useShiftTypes) {
   if (!cell || cell.type === "off") return "休";
-  if (cell.type === "half-off") return cell.half === "am" ? "前休" : "後休";
+  if (cell.type === "half-off") return cell.half === "am" ? "AM" : "PM";
   if (useShiftTypes && cell.shiftType) return cell.shiftType;
-  return "出";
+  return "１";
 }
 
 export function isAttendingCell(cell) {

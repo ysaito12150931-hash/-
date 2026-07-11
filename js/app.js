@@ -22,7 +22,9 @@ import {
   countWorkerOffDaysFromAssignments,
   getConferenceTeamsOnDay,
   getConferenceSubGroupsOnDay,
-  isConferenceDayForWorker,
+  getWorkerConferenceGroup,
+  getConferenceGroupStyle,
+  buildConferenceColorMap,
   normalizeConferenceDays,
 } from "./scheduler.js";
 
@@ -914,7 +916,7 @@ function renderTeams() {
     const confChk = document.createElement("input");
     confChk.type = "checkbox";
     confChk.checked = Boolean(tc.useConferenceDay);
-    confChk.title = "週1日、チーム出勤が最も多い日をカンファレンス日にする";
+    confChk.title = "月4回・隔週優先でカンファレンス日を設定（参加者が多い日を優先）";
     confChk.addEventListener("change", () => {
       tc.useConferenceDay = confChk.checked;
       persist();
@@ -1017,7 +1019,7 @@ function renderSubGroups() {
     const confChk = document.createElement("input");
     confChk.type = "checkbox";
     confChk.checked = Boolean(sgc.useConferenceDay);
-    confChk.title = "週1日、サブグループ出勤が最も多い日をカンファレンス日にする";
+    confChk.title = "月4回・隔週優先でカンファレンス日を設定（参加者が多い日を優先）";
     confChk.addEventListener("change", () => {
       sgc.useConferenceDay = confChk.checked;
       persist();
@@ -1163,6 +1165,12 @@ function renderShiftResult(result) {
   const workers = state.workers;
   const conferenceDays = normalizeConferenceDays(rawConf);
   const subGroups = state.subGroups ?? [];
+  const confColorMap = buildConferenceColorMap(
+    teams,
+    subGroups,
+    state.teamConstraints,
+    state.subGroupConstraints
+  );
   const days = getDaysInMonth(year, month);
   const useTypes = state.useShiftTypes;
   const root = $("#shift-print-root");
@@ -1186,12 +1194,16 @@ function renderShiftResult(result) {
     const tc = state.teamConstraints[team.id];
     if (!tc?.useConferenceDay) return;
     const entries = conferenceDays.teams[team.id] || [];
+    const style = getConferenceGroupStyle(confColorMap, "team", team.id);
+    const cardStyle = style
+      ? ` style="border-left:4px solid ${style.color};background:${style.bg}"`
+      : "";
     if (!entries.length) {
-      summaryHtml += `<div class="card-stat conference-card">${escapeHtml(team.name)}: カンファレンス日なし</div>`;
+      summaryHtml += `<div class="card-stat conference-card"${cardStyle}>${escapeHtml(team.name)}: カンファレンス日なし</div>`;
       return;
     }
     const list = entries.map((e) => `${e.day}日(${e.count}名)`).join("、");
-    summaryHtml += `<div class="card-stat conference-card"><strong>${escapeHtml(team.name)}</strong> 会: ${escapeHtml(list)}</div>`;
+    summaryHtml += `<div class="card-stat conference-card"${cardStyle}><strong>${escapeHtml(team.name)}</strong> 会: ${escapeHtml(list)}</div>`;
   });
 
   subGroups.forEach((sg) => {
@@ -1200,12 +1212,16 @@ function renderShiftResult(result) {
     const team = teams.find((t) => t.id === sg.teamId);
     const label = team ? `${team.name} / ${sg.name}` : sg.name;
     const entries = conferenceDays.subGroups[sg.id] || [];
+    const style = getConferenceGroupStyle(confColorMap, "subGroup", sg.id);
+    const cardStyle = style
+      ? ` style="border-left:4px solid ${style.color};background:${style.bg}"`
+      : "";
     if (!entries.length) {
-      summaryHtml += `<div class="card-stat conference-card">${escapeHtml(label)}: カンファレンス日なし</div>`;
+      summaryHtml += `<div class="card-stat conference-card"${cardStyle}>${escapeHtml(label)}: カンファレンス日なし</div>`;
       return;
     }
     const list = entries.map((e) => `${e.day}日(${e.count}名)`).join("、");
-    summaryHtml += `<div class="card-stat conference-card"><strong>${escapeHtml(label)}</strong> 会: ${escapeHtml(list)}</div>`;
+    summaryHtml += `<div class="card-stat conference-card"${cardStyle}><strong>${escapeHtml(label)}</strong> 会: ${escapeHtml(list)}</div>`;
   });
 
   summary.innerHTML = summaryHtml;
@@ -1216,19 +1232,35 @@ function renderShiftResult(result) {
     const dow = ["日", "月", "火", "水", "木", "金", "土"][new Date(year, month - 1, d).getDay()];
     const confTeams = getConferenceTeamsOnDay(conferenceDays, teams, d);
     const confSubGroups = getConferenceSubGroupsOnDay(conferenceDays, subGroups, d);
-    const confLabels = [
-      ...confTeams.map((t) => t.name),
+    const confItems = [
+      ...confTeams.map((t) => ({ type: "team", id: t.id, label: t.name })),
       ...confSubGroups.map((sg) => {
         const team = teams.find((t) => t.id === sg.teamId);
-        return team ? `${team.name}/${sg.name}` : sg.name;
+        return {
+          type: "subGroup",
+          id: sg.id,
+          label: team ? `${team.name}/${sg.name}` : sg.name,
+        };
       }),
     ];
-    const thCls = confLabels.length ? "th-conference" : "";
-    const confHint = confLabels.length
-      ? ` title="${escapeHtml(confLabels.join("・"))} カンファレンス日"`
+    const confHint = confItems.length
+      ? ` title="${escapeHtml(confItems.map((c) => c.label).join("・"))} カンファレンス日"`
       : "";
-    const confBadge = confLabels.length ? '<br><small class="conf-badge">会</small>' : "";
-    html += `<th class="${thCls}"${confHint}>${d}<br><small>${dow}</small>${confBadge}</th>`;
+    const confBadges = confItems
+      .map((item) => {
+        const style = getConferenceGroupStyle(confColorMap, item.type, item.id);
+        if (!style) return "";
+        return `<small class="conf-badge" style="background:${style.color}">会</small>`;
+      })
+      .join("");
+    const thStyle =
+      confItems.length === 1
+        ? (() => {
+            const style = getConferenceGroupStyle(confColorMap, confItems[0].type, confItems[0].id);
+            return style ? ` style="background:${style.bg};border-bottom:3px solid ${style.color}"` : "";
+          })()
+        : "";
+    html += `<th${thStyle}${confHint}>${d}<br><small>${dow}</small>${confBadges ? `<br>${confBadges}` : ""}</th>`;
   }
   html += "<th class='shift-off-col'>休み<br><small>日数</small></th></tr></thead><tbody>";
 
@@ -1245,19 +1277,32 @@ function renderShiftResult(result) {
       for (let d = 1; d <= days; d++) {
         const cell = assignments[w.id][d];
         let label = formatCellDisplay(cell, useTypes);
-        const isConf = isConferenceDayForWorker(conferenceDays, w, d);
+        const confGroup = getWorkerConferenceGroup(conferenceDays, w, d);
         let cls = "cell-off";
+        let cellStyle = "";
         if (cell?.type === "half-off") {
           cls = cell.half === "am" ? "cell-half-am" : "cell-half-pm";
         } else if (cell?.type === "work") {
           cls = w.isSupervisor ? "cell-supervisor" : "cell-work";
-          if (isConf) {
-            cls += " cell-conference";
-            label = useTypes && cell.shiftType ? `${cell.shiftType}・会` : "会";
+          if (confGroup) {
+            const style = getConferenceGroupStyle(confColorMap, confGroup.type, confGroup.id);
+            if (style) {
+              cls += " cell-conference";
+              cellStyle = ` style="background:${style.bg};color:${style.color};font-weight:700"`;
+            }
           }
         }
-        const title = isConf ? `${label}（カンファレンス日）` : label;
-        html += `<td class="${cls}" title="${escapeHtml(title)}">${escapeHtml(label)}</td>`;
+        const confName =
+          confGroup &&
+          (confGroup.type === "team"
+            ? teams.find((t) => t.id === confGroup.id)?.name
+            : (() => {
+                const sg = subGroups.find((s) => s.id === confGroup.id);
+                const t = teams.find((x) => x.id === sg?.teamId);
+                return sg ? (t ? `${t.name}/${sg.name}` : sg.name) : "";
+              })());
+        const title = confName ? `${label}（${confName} カンファレンス）` : label;
+        html += `<td class="${cls}"${cellStyle} title="${escapeHtml(title)}">${escapeHtml(label)}</td>`;
       }
       html += `<td class="shift-off-col${offMatch ? "" : " shift-off-mismatch"}" title="目標 ${targetOff} 日">${formatOffDaysDisplay(actualOff, targetOff)}</td></tr>`;
     });
@@ -1272,6 +1317,30 @@ function renderShiftResult(result) {
     html += `<td class="shift-total-cell">${total}</td>`;
   }
   html += "<td class='shift-off-col'></td></tr></tfoot></table>";
+
+  const legendItems = [];
+  teams.forEach((team) => {
+    if (!state.teamConstraints[team.id]?.useConferenceDay) return;
+    const style = getConferenceGroupStyle(confColorMap, "team", team.id);
+    if (!style) return;
+    legendItems.push(
+      `<span class="conf-legend-item"><span class="conf-legend-swatch" style="background:${style.bg};border-color:${style.color}"></span>${escapeHtml(team.name)}</span>`
+    );
+  });
+  subGroups.forEach((sg) => {
+    if (!state.subGroupConstraints[sg.id]?.useConferenceDay) return;
+    const team = teams.find((t) => t.id === sg.teamId);
+    const label = team ? `${team.name}/${sg.name}` : sg.name;
+    const style = getConferenceGroupStyle(confColorMap, "subGroup", sg.id);
+    if (!style) return;
+    legendItems.push(
+      `<span class="conf-legend-item"><span class="conf-legend-swatch" style="background:${style.bg};border-color:${style.color}"></span>${escapeHtml(label)}</span>`
+    );
+  });
+  if (legendItems.length) {
+    html += `<p class="shift-conf-legend">${legendItems.join("")}</p>`;
+  }
+
   wrap.innerHTML = html;
 }
 
