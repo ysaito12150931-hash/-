@@ -140,13 +140,18 @@ export function getWeekdayLabel(year, month, day) {
 
 const COL_TEAM = 0;
 const COL_NAME = 1;
+export const OFF_DAYS_HEADER = "月間休み日数";
 
 function dayColumn(day) {
   return COL_NAME + day;
 }
 
+function offDaysColumn(days) {
+  return dayColumn(days) + 1;
+}
+
 function lastColumnIndex(days) {
-  return dayColumn(days);
+  return offDaysColumn(days);
 }
 
 function fillSpacerRow(ws, r, days, style) {
@@ -163,6 +168,14 @@ function writeWorkerRow(ws, r, days, worker, weekends) {
     const value = worker.cells?.[d - 1] ?? "";
     setStyledCell(ws, r, dayColumn(d), value, style);
   }
+  const offDays = worker.monthlyOffDays;
+  setStyledCell(
+    ws,
+    r,
+    offDaysColumn(days),
+    offDays == null || offDays === "" ? "" : offDays,
+    STYLES.workerCell
+  );
 }
 
 function getGroupLabel(section) {
@@ -200,6 +213,7 @@ export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams 
     const style = weekends.has(d) ? STYLES.headerDayWeekend : STYLES.headerDay;
     setStyledCell(ws, 0, dayColumn(d), d, style);
   }
+  setStyledCell(ws, 0, offDaysColumn(days), OFF_DAYS_HEADER, STYLES.headerName);
 
   setStyledCell(ws, 1, COL_TEAM, "", STYLES.headerName);
   setStyledCell(ws, 1, COL_NAME, "", STYLES.headerName);
@@ -207,6 +221,7 @@ export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams 
     const style = weekends.has(d) ? STYLES.headerDowWeekend : STYLES.headerDow;
     setStyledCell(ws, 1, dayColumn(d), getWeekdayLabel(year, month, d), style);
   }
+  setStyledCell(ws, 1, offDaysColumn(days), "日数", STYLES.headerDow);
 
   let r = 2;
   ws["!merges"] = [];
@@ -236,7 +251,7 @@ export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams 
     s: { c: 0, r: 0 },
     e: { c: lastColumnIndex(days), r: Math.max(r - 1, 1) },
   });
-  ws["!cols"] = [{ wch: 12 }, { wch: 14 }, ...Array.from({ length: days }, () => ({ wch: 6 }))];
+  ws["!cols"] = [{ wch: 12 }, { wch: 14 }, ...Array.from({ length: days }, () => ({ wch: 6 })), { wch: 10 }];
   ws["!rows"] = [{ hpt: 22 }, { hpt: 20 }];
   ws["!views"] = [
     {
@@ -256,6 +271,15 @@ export function detectCalendarDataStartRow(rows) {
     if (/^[月火水木金土日]$/u.test(String(row1[c] ?? "").trim())) return 2;
   }
   return 1;
+}
+
+/** @param {unknown[]} header */
+export function detectOffDaysColumn(header) {
+  for (let c = 0; c < header.length; c++) {
+    const h = String(header[c] ?? "").trim();
+    if (h === OFF_DAYS_HEADER || h.includes("月間休み")) return c;
+  }
+  return null;
 }
 
 /** @param {unknown[]} header */

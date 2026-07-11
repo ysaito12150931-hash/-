@@ -1,6 +1,6 @@
 import { getDaysInMonth } from "./store.js";
 
-const MAX_ATTEMPTS = 200;
+const MAX_ATTEMPTS = 300;
 
 /**
  * @returns {{ ok: boolean, assignments?: object, messages: string[], stats?: object, year?: number, month?: number, workers?: object[] }}
@@ -417,17 +417,30 @@ function isOffTargetFixedByPreferences(w, days, lockedOff, halfOff, targetOff) {
 }
 
 function collectScheduleHints(workers, days, lockedOff, lockedWork, halfOff, constraints, maxConsecutiveWork) {
-  void constraints;
   void maxConsecutiveWork;
   const hints = [];
   for (const w of workers) {
     const target = w.monthlyOffDays ?? 0;
-    if (isOffTargetFixedByPreferences(w, days, lockedOff, halfOff, target)) continue;
     const prefOff =
       countLockedOffDays(lockedOff, w.id, days) + countHalfOffDays(halfOff, w.id, days) * 0.5;
     if (prefOff > target + 0.001) {
       hints.push(`${w.name}: Excel希望休（${formatOffDays(prefOff)}日）が月間休み日数（${target}日）を超えています。`);
+      continue;
     }
+    if (isOffTargetFixedByPreferences(w, days, lockedOff, halfOff, target)) {
+      const row = buildFixedWorkerRow(w, days, lockedOff, lockedWork, halfOff);
+      if (violatesConsecutiveWork(row, days, maxConsecutiveWork)) {
+        hints.push(
+          `${w.name}: Excel希望休が月間休み日数（${formatOffDays(target)}日）と一致するため残りは全出勤になりますが、連勤上限（${maxConsecutiveWork}日）を超えます。`
+        );
+      }
+    }
+  }
+  const lockedPrefCount = workers.filter((w) => countLockedOffDays(lockedOff, w.id, days) > 0).length;
+  if (lockedPrefCount > 0) {
+    hints.push(
+      `Excel休み希望が設定されている勤務者が${lockedPrefCount}名います。休み希望は優先されますが、月間休み日数との調整が難しい場合があります。`
+    );
   }
   return hints;
 }
@@ -470,22 +483,28 @@ function tryBuildSchedule(ctx) {
   }
 
   const targets = Object.fromEntries(workers.map((w) => [w.id, w.monthlyOffDays ?? 0]));
+  const useSeedFirst = seed % 2 === 0;
 
-  for (let d = 1; d <= days; d++) {
-    if (!assignDay(grid, workers, d, groupCtx, lockedOff, lockedWork, halfOff, requireSupervisor, rng)) {
-      return null;
+  if (useSeedFirst) {
+    for (const w of shuffledArray(workers, rng)) {
+      seedWorkerOffDays(grid, w, days, targets[w.id], lockedOff, lockedWork, halfOff, maxConsecutiveWork, rng);
+    }
+  } else {
+    for (let d = 1; d <= days; d++) {
+      if (!assignDay(grid, workers, d, groupCtx, lockedOff, lockedWork, halfOff, requireSupervisor, rng)) {
+        return null;
+      }
+    }
+    for (const w of shuffledArray(workers, rng)) {
+      const cur = countEffectiveOffDays(grid, w.id, days, halfOff);
+      const needed = targets[w.id] - cur;
+      if (needed > 0.001) {
+        spreadAdditionalOffDays(grid, w, days, needed, lockedOff, lockedWork, halfOff, maxConsecutiveWork, rng);
+      }
     }
   }
 
-  for (const w of shuffledArray(workers, rng)) {
-    const cur = countEffectiveOffDays(grid, w.id, days, halfOff);
-    const needed = targets[w.id] - cur;
-    if (needed > 0.001) {
-      spreadAdditionalOffDays(grid, w, days, needed, lockedOff, lockedWork, halfOff, maxConsecutiveWork, rng);
-    }
-  }
-
-  for (let pass = 0; pass < days * 4; pass++) {
+  for (let pass = 0; pass < days * 8; pass++) {
     let fixed = false;
     for (let d = 1; d <= days; d++) {
       if (validateDay(grid, workers, d, groupCtx, requireSupervisor).ok) continue;
@@ -496,7 +515,7 @@ function tryBuildSchedule(ctx) {
     if (!fixed) break;
   }
 
-  for (let pass = 0; pass < days * workers.length * 4; pass++) {
+  for (let pass = 0; pass < days * workers.length * 8; pass++) {
     let changed = false;
     for (const w of shuffledArray(workers, rng)) {
       const cur = countEffectiveOffDays(grid, w.id, days, halfOff);
@@ -561,6 +580,7 @@ function tryBuildSchedule(ctx) {
 function assignDay(grid, workers, day, groupCtx, lockedOff, lockedWork, halfOff, requireSupervisor, rng) {
   for (const w of workers) {
     if (lockedOff[w.id]?.[day]) grid[w.id][day] = false;
+    else if (lockedWork[w.id]?.[day] || halfOff[w.id]?.[day]) grid[w.id][day] = true;
     else grid[w.id][day] = true;
   }
   if (validateDay(grid, workers, day, groupCtx, requireSupervisor).ok) {
@@ -583,7 +603,9 @@ function assignDay(grid, workers, day, groupCtx, lockedOff, lockedWork, halfOff,
     }
 
     const offPool = shuffledArray(
-      workers.filter((w) => !grid[w.id][day] && !lockedOff[w.id]?.[day]),
+      workers.filter(
+        (w) => !grid[w.id][day] && !lockedOff[w.id]?.[day] && !lockedWork[w.id]?.[day] && !halfOff[w.id]?.[day]
+      ),
       rng
     );
     for (const w of offPool) {
@@ -622,6 +644,55 @@ function tryAddOff(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive
 
 function repairDay(grid, workers, day, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, requireSupervisor, rng) {
   if (validateDay(grid, workers, day, groupCtx, requireSupervisor).ok) return true;
+
+  const working = workers.filter((w) => grid[w.id][day]);
+  const supCount = working.filter((w) => w.isSupervisor).length;
+  const { constraints } = groupCtx;
+
+  if (supCount > constraints.supervisorMax) {
+    for (const w of shuffledArray(
+      working.filter(
+        (w) =>
+          w.isSupervisor &&
+          !lockedOff[w.id]?.[day] &&
+          !lockedWork[w.id]?.[day] &&
+          !halfOff[w.id]?.[day]
+      ),
+      rng
+    )) {
+      grid[w.id][day] = false;
+      if (
+        !violatesConsecutiveWork(grid[w.id], days, maxConsecutive) &&
+        validateDay(grid, workers, day, groupCtx, requireSupervisor).ok
+      ) {
+        return true;
+      }
+      grid[w.id][day] = true;
+    }
+  }
+
+  if (supCount < constraints.supervisorMin) {
+    for (const w of shuffledArray(
+      workers.filter(
+        (w) =>
+          w.isSupervisor &&
+          !grid[w.id][day] &&
+          !lockedOff[w.id]?.[day] &&
+          !lockedWork[w.id]?.[day] &&
+          !halfOff[w.id]?.[day]
+      ),
+      rng
+    )) {
+      grid[w.id][day] = true;
+      if (
+        !violatesConsecutiveWork(grid[w.id], days, maxConsecutive) &&
+        validateDay(grid, workers, day, groupCtx, requireSupervisor).ok
+      ) {
+        return true;
+      }
+      grid[w.id][day] = false;
+    }
+  }
 
   for (let attempt = 0; attempt < workers.length * 4; attempt++) {
     const working = shuffledArray(

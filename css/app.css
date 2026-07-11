@@ -267,6 +267,15 @@ fieldset.card legend {
   color: var(--primary);
 }
 
+.supervisor-stats-bar.supervisor-stats-warn {
+  background: #fff7ed;
+  border-color: #fdba74;
+}
+
+.supervisor-stats-bar.supervisor-stats-warn .stat-total strong {
+  color: #c2410c;
+}
+
 .team-assignment-card {
   margin-top: 1.25rem;
 }

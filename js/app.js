@@ -307,6 +307,7 @@ function bindConstraints() {
   ["supervisor-min", "supervisor-max"].forEach((id) => {
     document.getElementById(id).addEventListener("change", () => {
       readConstraintsFromForm();
+      renderSupervisorStats();
       persist();
     });
   });
@@ -330,14 +331,29 @@ function bindExcel() {
       readAllFromForm();
       const wb = await readWorkbookFromFile(file);
       const names = state.workers.map((w) => w.name);
-      const { preferences, warnings } = parsePreferenceSheet(wb, names, state.year, state.month);
+      const { preferences, monthlyOffDaysByName, warnings } = parsePreferenceSheet(wb, names, state.year, state.month);
       state.preferences = normalizePreferences(preferences);
+      let offDaysUpdated = 0;
+      for (const w of state.workers) {
+        if (monthlyOffDaysByName[w.name] != null) {
+          w.monthlyOffDays = monthlyOffDaysByName[w.name];
+          offDaysUpdated++;
+        }
+      }
       persist();
+      renderWorkers();
       renderPreferencePreview();
 
+      const statusParts = [];
+      if (offDaysUpdated > 0) {
+        statusParts.push(`月間休み日数 ${offDaysUpdated}名分を反映`);
+      }
       if (warnings.length) {
-        status.textContent = `読み込みました（警告: ${warnings.join(" / ")}）`;
+        status.textContent = `読み込みました（${statusParts.join("、")}${statusParts.length ? " / " : ""}警告: ${warnings.join(" / ")}）`;
         status.className = "status-msg warn";
+      } else if (statusParts.length) {
+        status.textContent = `休み希望と${statusParts.join("、")}しました。`;
+        status.className = "status-msg success";
       } else {
         status.textContent = "休み希望を読み込みました。";
         status.className = "status-msg success";
@@ -1066,15 +1082,49 @@ function renderConstraints() {
 }
 
 function renderSupervisorStats() {
-  const el = $("#supervisor-registered-hint");
-  if (!el) return;
   const supervisors = state.workers.filter((w) => w.isSupervisor);
-  if (!supervisors.length) {
-    el.textContent =
-      "現在、責任者として登録されている勤務者はいません。「勤務者」タブのチェックで設定します。";
-    return;
+  const count = supervisors.length;
+  const names = supervisors.map((w) => w.name);
+  const namesText = names.length ? names.join("、") : "—";
+  const dailyMax = parseInt($("#supervisor-max")?.value, 10);
+  const max = Number.isNaN(dailyMax) ? state.constraints.supervisorMax ?? 2 : dailyMax;
+
+  const countEl = $("#supervisor-registered-count");
+  if (countEl) countEl.textContent = String(count);
+
+  const countConstraintsEl = $("#supervisor-registered-count-constraints");
+  if (countConstraintsEl) countConstraintsEl.textContent = String(count);
+
+  const namesEl = $("#supervisor-registered-names");
+  if (namesEl) {
+    namesEl.textContent = namesText;
+    namesEl.title = names.length ? names.join("\n") : "";
   }
-  el.textContent = `責任者として登録: ${supervisors.length} 名（${supervisors.map((w) => w.name).join("、")}）。ここで設定するのは1日あたりの人数で、登録人数とは別です。`;
+
+  const maxDisplayEl = $("#supervisor-daily-max-display");
+  if (maxDisplayEl) maxDisplayEl.textContent = String(max);
+
+  const barWorkers = document.querySelector("#panel-workers .supervisor-stats-bar");
+  const barConstraints = $("#supervisor-stats-constraints");
+  const overMax = count > max;
+  for (const bar of [barWorkers, barConstraints]) {
+    if (!bar) continue;
+    bar.classList.toggle("supervisor-stats-warn", overMax);
+  }
+
+  const hintEl = $("#supervisor-registered-hint");
+  if (!hintEl) return;
+  if (!count) {
+    hintEl.textContent =
+      "現在、責任者として登録されている勤務者はいません。「勤務者」タブのチェックで設定します。";
+    hintEl.className = "hint warn-hint";
+  } else if (overMax) {
+    hintEl.textContent = `登録 ${count} 名ですが、1日あたりの上限は ${max} 名です。上限を ${count} 名以上にするか、責任者登録を減らしてください。`;
+    hintEl.className = "hint warn-hint";
+  } else {
+    hintEl.textContent = `登録者: ${namesText}。上の「上限」は1日に出勤する責任者の人数です（登録人数とは別）。`;
+    hintEl.className = "hint";
+  }
 }
 
 function renderPreferencePreview() {

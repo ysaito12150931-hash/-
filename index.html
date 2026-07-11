@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>シフト作成アプリ</title>
-  <link rel="stylesheet" href="css/app.css?v=1.4.4" />
+  <link rel="stylesheet" href="css/app.css?v=1.5.1" />
   <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 </head>
 <body>
@@ -69,6 +69,10 @@
     <section id="panel-workers" class="panel">
       <h2>勤務者</h2>
       <p class="hint">各勤務者の月間休み希望日数（自動調整の目標）・所属グループ・責任者を設定します。グループごとにまとめて表示され、並び順はグループ内でのみ変更できます。グループの順序は「グループ」タブで設定します。</p>
+      <div class="team-stats-bar supervisor-stats-bar" aria-live="polite">
+        <span class="stat stat-total">責任者登録 <strong id="supervisor-registered-count">0</strong> 名</span>
+        <span class="stat">登録者 <strong id="supervisor-registered-names">—</strong></span>
+      </div>
       <div class="table-wrap">
         <table class="data-table" id="workers-table">
           <thead>
@@ -186,11 +190,15 @@
       <fieldset class="card">
         <legend>責任者（1日あたり）</legend>
         <p class="hint">可能な限り責任者を最低1人配置します。制約を満たせない場合は0人でも可とします。</p>
+        <div class="team-stats-bar supervisor-stats-bar" id="supervisor-stats-constraints" aria-live="polite">
+          <span class="stat stat-total">責任者登録人数 <strong id="supervisor-registered-count-constraints">0</strong> 名</span>
+          <span class="stat">1日あたり上限 <strong id="supervisor-daily-max-display">2</strong> 名</span>
+        </div>
+        <p id="supervisor-registered-hint" class="hint" aria-live="polite"></p>
         <div class="form-grid">
           <label>責任者 下限 <input type="number" id="supervisor-min" min="0" value="1" /></label>
           <label>責任者 上限 <input type="number" id="supervisor-max" min="0" value="2" /></label>
         </div>
-        <p id="supervisor-registered-hint" class="hint" aria-live="polite"></p>
       </fieldset>
     </section>
 
@@ -201,7 +209,8 @@
         テンプレートは1行目に日付、2行目に曜日（土日は赤背景）です。A列にグループ名、B列に勤務者名、グループごとにまとめて並びます（アプリの登録順）。日付行とグループ・勤務者列はスクロール時に固定されます。<br />
         同一メイングループ内のサブグループの境目も空行で区切ります。チームの境目は黒（50%相当）の空行です。<br />
         <strong>休み希望:</strong> 「休」「×」「off」など　／　<strong>出勤希望:</strong> 「出勤」「出」「○」など<br />
-        <strong>半休:</strong> 「午前休」「前休」／「午後休」「後休」（休み日数は0.5日）
+        <strong>半休:</strong> 「午前休」「前休」／「午後休」「後休」（休み日数は0.5日）<br />
+        <strong>月間休み日数:</strong> 各勤務者行の右端列（「勤務者」タブで設定した値がテンプレートに出力されます）。アップロード時にこの列を読み取り、シフト生成の目標休み日数として使用します。
       </p>
       <div class="actions">
         <button type="button" id="download-template" class="btn secondary">テンプレートをダウンロード</button>
@@ -247,6 +256,6 @@
     <p>データはこのブラウザのローカルストレージに保存されます。</p>
   </footer>
 
-  <script type="module" src="js/app.js?v=1.4.4"></script>
+  <script type="module" src="js/app.js?v=1.5.1"></script>
 </body>
 </html>

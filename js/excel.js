@@ -3,6 +3,7 @@ import {
   fillCalendarTemplateSheet,
   detectCalendarDataStartRow,
   detectNameColumn,
+  detectOffDaysColumn,
 } from "./excel-format.js";
 
 const OFF_MARKERS = new Set([
@@ -120,15 +121,17 @@ export function parsePreferenceSheet(workbook, workerNames, year, month) {
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-  if (!rows.length) return { preferences: {}, warnings: ["シートが空です"] };
+  if (!rows.length) return { preferences: {}, monthlyOffDaysByName: {}, warnings: ["シートが空です"] };
 
   const header = rows[0];
   const dataStartRow = detectCalendarDataStartRow(rows);
   const nameCol = detectNameColumn(header);
+  const offDaysCol = detectOffDaysColumn(header);
+  const dayColEnd = offDaysCol != null ? offDaysCol : header.length;
   const dayCols = [];
   const daysInMonth = getDaysInMonth(year, month);
 
-  for (let c = nameCol + 1; c < header.length; c++) {
+  for (let c = nameCol + 1; c < dayColEnd; c++) {
     const day = parseDayHeader(header[c], c, year, month);
     if (day >= 1 && day <= daysInMonth) {
       dayCols.push({ col: c, day });
@@ -143,6 +146,7 @@ export function parsePreferenceSheet(workbook, workerNames, year, month) {
   }
 
   const preferences = {};
+  const monthlyOffDaysByName = {};
   const nameSet = new Set(workerNames);
 
   for (let r = dataStartRow; r < rows.length; r++) {
@@ -156,6 +160,11 @@ export function parsePreferenceSheet(workbook, workerNames, year, month) {
     }
     if (!preferences[name]) preferences[name] = {};
 
+    if (offDaysCol != null) {
+      const offDays = parseMonthlyOffDaysCell(row[offDaysCol]);
+      if (offDays != null) monthlyOffDaysByName[name] = offDays;
+    }
+
     for (const { col, day } of dayCols) {
       const kind = parsePreferenceCell(row[col]);
       if (kind === "conflict") {
@@ -166,7 +175,13 @@ export function parsePreferenceSheet(workbook, workerNames, year, month) {
     }
   }
 
-  return { preferences, warnings };
+  return { preferences, monthlyOffDaysByName, warnings };
+}
+
+function parseMonthlyOffDaysCell(value) {
+  if (value == null || value === "") return null;
+  const n = parseInt(String(value).trim(), 10);
+  return Number.isNaN(n) ? null : Math.max(0, n);
 }
 
 function parseDayHeader(cell, colIndex, year, month) {
@@ -211,7 +226,15 @@ export function exportShiftWorkbook(result, state) {
     for (let d = 1; d <= days; d++) {
       cells.push(formatCellExport(byDay[d], state.useShiftTypes));
     }
-    return { id: w.id, name: w.name, teamId: w.teamId, subGroupId: w.subGroupId, isSupervisor: w.isSupervisor, cells };
+    return {
+      id: w.id,
+      name: w.name,
+      teamId: w.teamId,
+      subGroupId: w.subGroupId,
+      isSupervisor: w.isSupervisor,
+      monthlyOffDays: w.monthlyOffDays,
+      cells,
+    };
   });
 
   fillCalendarTemplateSheet(ws, year, month, days, dataWorkers, state.teams ?? [], state.subGroups ?? []);
