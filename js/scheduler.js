@@ -2,6 +2,7 @@ import { getDaysInMonth } from "./store.js";
 
 const MAX_ATTEMPTS = 500;
 const MAX_AUTO_OFF_CONSECUTIVE = 3;
+const PREFERRED_MAX_CONSECUTIVE = 3;
 const CONFERENCE_SESSIONS_PER_MONTH = 4;
 
 export const CONFERENCE_COLORS = [
@@ -258,6 +259,34 @@ function findLongestWorkStreak(row, days) {
   return best;
 }
 
+function findAllWorkStreaks(row, days) {
+  const streaks = [];
+  let start = 1;
+  let streak = 0;
+  for (let d = 1; d <= days + 1; d++) {
+    if (d <= days && row[d]) {
+      if (streak === 0) start = d;
+      streak++;
+    } else {
+      if (streak > 0) streaks.push({ start, end: d - 1, len: streak });
+      streak = 0;
+    }
+  }
+  return streaks;
+}
+
+function scoreWorkStreaks(row, days) {
+  let score = 0;
+  for (const streak of findAllWorkStreaks(row, days)) {
+    if (streak.len <= PREFERRED_MAX_CONSECUTIVE) {
+      score += (PREFERRED_MAX_CONSECUTIVE + 1 - streak.len) * 4;
+    } else {
+      score -= (streak.len - PREFERRED_MAX_CONSECUTIVE) * 15;
+    }
+  }
+  return score;
+}
+
 function daysAroundMid(start, end) {
   const mid = Math.floor((start + end) / 2);
   const out = [];
@@ -285,7 +314,28 @@ function offCandidateDays(row, days, w, lockedOff, lockedWork, halfOff) {
     let right = 0;
     for (let i = d - 1; i >= 1 && row[i]; i--) left++;
     for (let i = d + 1; i <= days && row[i]; i++) right++;
-    candidates.push({ d, score: left + right });
+    const runLen = left + right + 1;
+    let score = 0;
+    if (runLen > PREFERRED_MAX_CONSECUTIVE) score = runLen * 5;
+    else score = runLen - (PREFERRED_MAX_CONSECUTIVE + 1);
+    candidates.push({ d, score });
+  }
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates.map((c) => c.d);
+}
+
+function workCandidateDays(row, days, w, lockedOff) {
+  const candidates = [];
+  for (let d = 1; d <= days; d++) {
+    if (lockedOff[w.id]?.[d] || row[d]) continue;
+    const prev = row[d];
+    row[d] = true;
+    const streak = findLongestWorkStreak(row, days);
+    row[d] = prev;
+    let score = 0;
+    if (streak.len > PREFERRED_MAX_CONSECUTIVE) score -= streak.len * 6;
+    else score += PREFERRED_MAX_CONSECUTIVE + 1 - streak.len;
+    candidates.push({ d, score });
   }
   candidates.sort((a, b) => b.score - a.score);
   return candidates.map((c) => c.d);
@@ -350,10 +400,7 @@ function seedWorkerOffDays(grid, w, days, targetOff, lockedOff, lockedWork, half
   let cur = countEffectiveOffDays(grid, w.id, days, halfOff);
   let needed = targetOff - cur;
   if (needed > 0.001) {
-    const available = [];
-    for (let d = 1; d <= days; d++) {
-      if (canAssignOffOnDay(w, d, lockedOff, lockedWork, halfOff) && grid[w.id][d]) available.push(d);
-    }
+    const available = offCandidateDays(grid[w.id], days, w, lockedOff, lockedWork, halfOff);
     const count = Math.min(Math.ceil(needed - 0.001), available.length);
     if (count > 0) {
       const shuffled = shuffledArray(available, rng);
@@ -384,9 +431,14 @@ function seedWorkerOffDays(grid, w, days, targetOff, lockedOff, lockedWork, half
   guard = 0;
   while (cur > targetOff + 0.001 && guard < days * 2) {
     guard++;
-    const candidates = shuffledRange(1, days, rng).filter(
+    const preferred = workCandidateDays(grid[w.id], days, w, lockedOff).filter(
       (d) => canAssignOffOnDay(w, d, lockedOff, lockedWork, halfOff) && !grid[w.id][d]
     );
+    const candidates = preferred.length
+      ? preferred
+      : shuffledRange(1, days, rng).filter(
+          (d) => canAssignOffOnDay(w, d, lockedOff, lockedWork, halfOff) && !grid[w.id][d]
+        );
     let removed = false;
     for (const d of candidates) {
       grid[w.id][d] = true;
@@ -431,9 +483,9 @@ function spreadAdditionalOffDays(grid, w, days, neededOff, lockedOff, lockedWork
 }
 
 function trySwapForOff(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, workers, requireSupervisor, rng) {
-  const dayCandidates = shuffledRange(1, days, rng).slice(0, 12);
+  const preferred = offCandidateDays(grid[w.id], days, w, lockedOff, lockedWork, halfOff).filter((d) => grid[w.id][d]);
+  const dayCandidates = preferred.length ? preferred.slice(0, 12) : shuffledRange(1, days, rng).slice(0, 12);
   for (const d of dayCandidates) {
-    if (!grid[w.id][d] || !canAssignOffOnDay(w, d, lockedOff, lockedWork, halfOff)) continue;
     for (const w2 of shuffledArray(workers.filter((x) => x.id !== w.id), rng).slice(0, 8)) {
       if (grid[w2.id][d] || !canAssignOffOnDay(w2, d, lockedOff, lockedWork, halfOff)) continue;
       grid[w.id][d] = false;
@@ -826,7 +878,8 @@ function repairDay(grid, workers, day, days, lockedOff, lockedWork, halfOff, max
 function tryAddWork(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, workers, requireSupervisor, rng) {
   void lockedWork;
   void halfOff;
-  const candidates = shuffledRange(1, days, rng);
+  const preferred = workCandidateDays(grid[w.id], days, w, lockedOff);
+  const candidates = preferred.length ? preferred : shuffledRange(1, days, rng);
   for (const d of candidates) {
     if (lockedOff[w.id]?.[d]) continue;
     if (grid[w.id][d]) continue;
@@ -965,9 +1018,7 @@ function scoreSchedule(grid, workers, days, preferences, requireSupervisor, lock
         if (!grid[w.id][d]) score -= 16;
       }
     }
-    const streak = findLongestWorkStreak(grid[w.id], days);
-    score -= streak.len;
-    if (streak.len >= 4) score -= (streak.len - 3) * 3;
+    score += scoreWorkStreaks(grid[w.id], days);
     if (violatesConsecutiveAutoOff(grid[w.id], days, lockedOff, w.id)) {
       score -= 100;
     }
