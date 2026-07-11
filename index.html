@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>シフト作成アプリ</title>
-  <link rel="stylesheet" href="css/app.css?v=1.3.1" />
+  <link rel="stylesheet" href="css/app.css?v=1.4.0" />
   <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 </head>
 <body>
@@ -68,7 +68,7 @@
     <!-- 勤務者 -->
     <section id="panel-workers" class="panel">
       <h2>勤務者</h2>
-      <p class="hint">各勤務者の月間休み希望日数（自動調整の目標）・<strong>所属グループ</strong>・責任者を設定します。グループの作成は「グループ」タブで行います。</p>
+      <p class="hint">各勤務者の月間休み希望日数（自動調整の目標）・所属グループ・責任者を設定します。グループごとにまとめて表示され、並び順はグループ内でのみ変更できます。グループの順序は「グループ」タブで設定します。</p>
       <div class="table-wrap">
         <table class="data-table" id="workers-table">
           <thead>
@@ -103,7 +103,7 @@
     <!-- グループ -->
     <section id="panel-teams" class="panel">
       <h2>グループ設定</h2>
-      <p class="hint">メイングループとその中のサブグループを設定します。1日あたりの出勤人数の下限・上限は、メイングループ・サブグループそれぞれで設定できます。カンファレンス日はメイングループ・サブグループそれぞれで設定できます。</p>
+      <p class="hint">メイングループとその中のサブグループを設定します。1日あたりの出勤人数の下限・上限は、メイングループ・サブグループそれぞれで設定できます。カンファレンス日はメイングループ・サブグループそれぞれで設定できます。<strong>並び順</strong>は↑↓ボタンで変更でき、勤務者一覧・Excel・シフト表の表示順に反映されます。</p>
       <div class="team-stats-bar" id="team-worker-stats" aria-live="polite">
         <span class="stat stat-total">勤務者総数 <strong id="workers-total-count">0</strong> 名</span>
         <span class="stat">グループ所属 <strong id="workers-assigned-count">0</strong> 名</span>
@@ -120,6 +120,7 @@
               <th>1日の下限</th>
               <th>1日の上限</th>
               <th>カンファレンス日</th>
+              <th>並び順</th>
               <th></th>
             </tr>
           </thead>
@@ -142,6 +143,7 @@
               <th>1日の下限</th>
               <th>1日の上限</th>
               <th>カンファレンス日</th>
+              <th>並び順</th>
               <th></th>
             </tr>
           </thead>
@@ -195,7 +197,7 @@
     <section id="panel-excel" class="panel">
       <h2>出勤・休み希望（Excel）</h2>
       <p class="hint">
-        テンプレートは1行目に日付、2行目に曜日（土日は赤背景）です。A列にメイングループ名、B列に勤務者名、グループごとにまとめて並びます（アプリの登録順）。<br />
+        テンプレートは1行目に日付、2行目に曜日（土日は赤背景）です。A列にグループ名、B列に勤務者名、グループごとにまとめて並びます（アプリの登録順）。日付行とグループ・勤務者列はスクロール時に固定されます。<br />
         同一メイングループ内のサブグループの境目も空行で区切ります。チームの境目は黒（50%相当）の空行です。<br />
         <strong>休み希望:</strong> 「休」「×」「off」など　／　<strong>出勤希望:</strong> 「出勤」「出」「○」など<br />
         <strong>半休:</strong> 「午前休」「前休」／「午後休」「後休」（休み日数は0.5日）
@@ -244,6 +246,6 @@
     <p>データはこのブラウザのローカルストレージに保存されます。</p>
   </footer>
 
-  <script type="module" src="js/app.js?v=1.3.1"></script>
+  <script type="module" src="js/app.js?v=1.4.0"></script>
 </body>
 </html>

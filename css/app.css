@@ -108,6 +108,22 @@ body {
   font-weight: 600;
 }
 
+.group-header-row td {
+  background: #dbeafe;
+  color: #1e3a8a;
+  font-weight: 700;
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-top: 2px solid #93c5fd;
+}
+
+.shift-table-wrap .group-header-row td {
+  background: #dbeafe !important;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
 .panel h2 {
   margin-top: 0;
   font-size: 1.25rem;

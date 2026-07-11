@@ -1,5 +1,7 @@
 /** @typedef {import('xlsx').WorkSheet} WorkSheet */
 
+import { getWorkerSections } from "./worker-groups.js";
+
 const DOW_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
 
 /** 白背景に 50% 重ねた相当色（Excel は透過非対応のため近似） */
@@ -136,71 +138,6 @@ export function getWeekdayLabel(year, month, day) {
   return DOW_LABELS[new Date(year, month - 1, day).getDay()];
 }
 
-function workerKey(w) {
-  return w.id ?? w.name;
-}
-
-function hasValidTeam(worker, teams) {
-  return Boolean(worker.teamId && teams.some((t) => t.id === worker.teamId));
-}
-
-/**
- * @param {{ id?: string, name: string, teamId?: string|null, subGroupId?: string|null, isSupervisor?: boolean, cells?: string[] }[]} workers
- * @param {{ id: string, name: string }[]} teams
- * @param {{ id: string, name: string, teamId: string }[]} [subGroups]
- *
- * 並び順はアプリで登録した勤務者の順番（workers 配列の順）をそのまま保持する。
- */
-export function groupWorkersByTeam(workers, teams, subGroups = []) {
-  const groups = [];
-  const assigned = new Set();
-
-  const mark = (list) => list.forEach((w) => assigned.add(workerKey(w)));
-  const isUnassigned = (w) => !assigned.has(workerKey(w));
-
-  const supervisorsNoTeam = workers.filter(
-    (w) => w.isSupervisor && !hasValidTeam(w, teams)
-  );
-  if (supervisorsNoTeam.length) {
-    groups.push({ team: null, members: supervisorsNoTeam });
-    mark(supervisorsNoTeam);
-  }
-
-  for (const team of teams) {
-    const members = workers.filter((w) => w.teamId === team.id);
-    if (members.length) {
-      groups.push({ team, members });
-      mark(members);
-    }
-  }
-
-  const unassigned = workers.filter((w) => isUnassigned(w));
-  if (unassigned.length) {
-    groups.push({ team: null, members: unassigned });
-  }
-
-  return groups;
-}
-
-function partitionBySubGroup(members, subGroups, teamId) {
-  const partitions = [];
-  const assigned = new Set();
-  const teamSubs = subGroups.filter((sg) => sg.teamId === teamId);
-
-  for (const sg of teamSubs) {
-    const sgMembers = members.filter((w) => w.subGroupId === sg.id);
-    if (sgMembers.length) {
-      partitions.push({ subGroup: sg, members: sgMembers });
-      sgMembers.forEach((w) => assigned.add(workerKey(w)));
-    }
-  }
-
-  const rest = members.filter((w) => !assigned.has(workerKey(w)));
-  if (rest.length) partitions.push({ subGroup: null, members: rest });
-  if (!partitions.length && members.length) partitions.push({ subGroup: null, members });
-  return partitions;
-}
-
 const COL_TEAM = 0;
 const COL_NAME = 1;
 
@@ -228,12 +165,11 @@ function writeWorkerRow(ws, r, days, worker, weekends) {
   }
 }
 
-function getGroupLabel(group) {
-  if (group.team?.name) return group.team.name;
-  if (group.members.length > 0 && group.members.every((w) => w.isSupervisor)) {
-    return "責任者（チーム未所属）";
+function getGroupLabel(section) {
+  if (section.team?.name && section.subGroup?.name) {
+    return `${section.team.name} / ${section.subGroup.name}`;
   }
-  return "（未所属）";
+  return section.label;
 }
 
 function applyTeamColumnMerge(ws, rStart, rEnd, label) {
@@ -256,9 +192,9 @@ function applyTeamColumnMerge(ws, rStart, rEnd, label) {
  */
 export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams = [], subGroups = []) {
   const weekends = getWeekendDaySet(year, month, days);
-  const groups = groupWorkersByTeam(workers, teams, subGroups);
+  const sections = getWorkerSections(workers, teams, subGroups);
 
-  setStyledCell(ws, 0, COL_TEAM, "チーム", STYLES.headerName);
+  setStyledCell(ws, 0, COL_TEAM, "グループ", STYLES.headerName);
   setStyledCell(ws, 0, COL_NAME, "勤務者", STYLES.headerName);
   for (let d = 1; d <= days; d++) {
     const style = weekends.has(d) ? STYLES.headerDayWeekend : STYLES.headerDay;
@@ -275,33 +211,22 @@ export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams 
   let r = 2;
   ws["!merges"] = [];
 
-  groups.forEach((group, groupIndex) => {
+  sections.forEach((section, sectionIndex) => {
     const groupStartRow = r;
-    const partitions =
-      group.team && subGroups.length
-        ? partitionBySubGroup(group.members, subGroups, group.team.id)
-        : [{ subGroup: null, members: group.members }];
 
-    partitions.forEach((part, partIndex) => {
-      part.members.forEach((w, memberIndex) => {
-        writeWorkerRow(ws, r, days, w, weekends);
-        r++;
+    section.members.forEach((w, memberIndex) => {
+      writeWorkerRow(ws, r, days, w, weekends);
+      r++;
 
-        if (memberIndex < part.members.length - 1) {
-          fillSpacerRow(ws, r, days, STYLES.spacerWithinTeam);
-          r++;
-        }
-      });
-
-      if (partIndex < partitions.length - 1 && part.members.length) {
+      if (memberIndex < section.members.length - 1) {
         fillSpacerRow(ws, r, days, STYLES.spacerWithinTeam);
         r++;
       }
     });
 
-    applyTeamColumnMerge(ws, groupStartRow, r - 1, getGroupLabel(group));
+    applyTeamColumnMerge(ws, groupStartRow, r - 1, getGroupLabel(section));
 
-    if (groupIndex < groups.length - 1) {
+    if (sectionIndex < sections.length - 1) {
       fillSpacerRow(ws, r, days, STYLES.spacerTeamBoundary);
       r++;
     }
@@ -313,6 +238,15 @@ export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams 
   });
   ws["!cols"] = [{ wch: 12 }, { wch: 14 }, ...Array.from({ length: days }, () => ({ wch: 6 }))];
   ws["!rows"] = [{ hpt: 22 }, { hpt: 20 }];
+  ws["!views"] = [
+    {
+      state: "frozen",
+      xSplit: 2,
+      ySplit: 2,
+      topLeftCell: "C3",
+      activeCell: "C3",
+    },
+  ];
 }
 
 export function detectCalendarDataStartRow(rows) {
@@ -331,6 +265,6 @@ export function detectNameColumn(header) {
     if (h === "勤務者" || h.includes("勤務者")) return c;
   }
   const a = String(header[0] ?? "").trim();
-  if (a === "チーム" || a.includes("チーム")) return 1;
+  if (a === "チーム" || a.includes("チーム") || a === "グループ" || a.includes("グループ")) return 1;
   return 0;
 }

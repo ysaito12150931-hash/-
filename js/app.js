@@ -1,5 +1,13 @@
 import { loadState, saveState, getDaysInMonth, APP_VERSION } from "./store.js";
 import {
+  getWorkerSections,
+  moveWorkerWithinSection,
+  moveTeamOrder,
+  moveSubGroupOrder,
+  canMoveSubGroupUp,
+  canMoveSubGroupDown,
+} from "./worker-groups.js";
+import {
   parsePreferenceSheet,
   buildTemplateWorkbook,
   exportShiftWorkbook,
@@ -485,88 +493,20 @@ function renderShiftTypes() {
 function renderWorkers() {
   const tbody = $("#workers-tbody");
   tbody.innerHTML = "";
-  state.workers.forEach((w, idx) => {
-    const tr = document.createElement("tr");
+  const sections = getWorkerSections(state.workers, state.teams, state.subGroups);
 
-    const nameTd = document.createElement("td");
-    const nameInput = document.createElement("input");
-    nameInput.type = "text";
-    nameInput.value = w.name;
-    nameInput.addEventListener("change", () => {
-      const old = w.name;
-      w.name = nameInput.value.trim() || w.name;
-      if (state.preferences[old]) {
-        state.preferences[w.name] = state.preferences[old];
-        delete state.preferences[old];
-      }
-      persist();
+  sections.forEach((section) => {
+    const headerTr = document.createElement("tr");
+    headerTr.className = "group-header-row";
+    const headerTd = document.createElement("td");
+    headerTd.colSpan = 7;
+    headerTd.textContent = section.label;
+    headerTr.appendChild(headerTd);
+    tbody.appendChild(headerTr);
+
+    section.members.forEach((w) => {
+      tbody.appendChild(createWorkerRow(w, section));
     });
-    nameTd.appendChild(nameInput);
-
-    const teamTd = document.createElement("td");
-    teamTd.appendChild(createTeamSelect(w));
-
-    const subTd = document.createElement("td");
-    subTd.appendChild(createSubGroupSelect(w));
-
-    const supTd = document.createElement("td");
-    const supChk = document.createElement("input");
-    supChk.type = "checkbox";
-    supChk.checked = w.isSupervisor;
-    supChk.addEventListener("change", () => {
-      w.isSupervisor = supChk.checked;
-      persist();
-    });
-    supTd.appendChild(supChk);
-
-    const offTd = document.createElement("td");
-    const offInput = document.createElement("input");
-    offInput.type = "number";
-    offInput.min = 0;
-    offInput.max = 31;
-    offInput.value = w.monthlyOffDays;
-    offInput.addEventListener("change", () => {
-      w.monthlyOffDays = parseInt(offInput.value, 10) || 0;
-      persist();
-    });
-    offTd.appendChild(offInput);
-
-    const orderTd = document.createElement("td");
-    orderTd.className = "order-cell";
-    const upBtn = document.createElement("button");
-    upBtn.type = "button";
-    upBtn.className = "btn-icon";
-    upBtn.textContent = "↑";
-    upBtn.title = "上へ移動";
-    upBtn.disabled = idx === 0;
-    upBtn.addEventListener("click", () => moveWorker(idx, -1));
-    const downBtn = document.createElement("button");
-    downBtn.type = "button";
-    downBtn.className = "btn-icon";
-    downBtn.textContent = "↓";
-    downBtn.title = "下へ移動";
-    downBtn.disabled = idx === state.workers.length - 1;
-    downBtn.addEventListener("click", () => moveWorker(idx, 1));
-    orderTd.append(upBtn, downBtn);
-
-    const actTd = document.createElement("td");
-    const delBtn = document.createElement("button");
-    delBtn.type = "button";
-    delBtn.className = "btn-icon";
-    delBtn.textContent = "削除";
-    delBtn.addEventListener("click", () => {
-      if (!confirm(`${w.name} を削除しますか？`)) return;
-      delete state.preferences[w.name];
-      state.workers.splice(idx, 1);
-      renderWorkers();
-      renderTeams();
-      renderTeamAssignment();
-      persist();
-    });
-    actTd.appendChild(delBtn);
-
-    tr.append(nameTd, teamTd, subTd, supTd, offTd, orderTd, actTd);
-    tbody.appendChild(tr);
   });
 
   const hint = $("#workers-team-hint");
@@ -581,11 +521,132 @@ function renderWorkers() {
   renderTeamWorkerStats();
 }
 
-function moveWorker(idx, delta) {
-  const target = idx + delta;
-  if (target < 0 || target >= state.workers.length) return;
-  const [w] = state.workers.splice(idx, 1);
-  state.workers.splice(target, 0, w);
+function createWorkerRow(w, section) {
+  const tr = document.createElement("tr");
+
+  const nameTd = document.createElement("td");
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.value = w.name;
+  nameInput.addEventListener("change", () => {
+    const old = w.name;
+    w.name = nameInput.value.trim() || w.name;
+    if (state.preferences[old]) {
+      state.preferences[w.name] = state.preferences[old];
+      delete state.preferences[old];
+    }
+    persist();
+  });
+  nameTd.appendChild(nameInput);
+
+  const teamTd = document.createElement("td");
+  teamTd.appendChild(createTeamSelect(w));
+
+  const subTd = document.createElement("td");
+  subTd.appendChild(createSubGroupSelect(w));
+
+  const supTd = document.createElement("td");
+  const supChk = document.createElement("input");
+  supChk.type = "checkbox";
+  supChk.checked = w.isSupervisor;
+  supChk.addEventListener("change", () => {
+    w.isSupervisor = supChk.checked;
+    renderWorkers();
+    persist();
+  });
+  supTd.appendChild(supChk);
+
+  const offTd = document.createElement("td");
+  const offInput = document.createElement("input");
+  offInput.type = "number";
+  offInput.min = 0;
+  offInput.max = 31;
+  offInput.value = w.monthlyOffDays;
+  offInput.addEventListener("change", () => {
+    w.monthlyOffDays = parseInt(offInput.value, 10) || 0;
+    persist();
+  });
+  offTd.appendChild(offInput);
+
+  const orderTd = document.createElement("td");
+  orderTd.className = "order-cell";
+  const memberIdx = section.members.findIndex((m) => m.id === w.id);
+  const upBtn = document.createElement("button");
+  upBtn.type = "button";
+  upBtn.className = "btn-icon";
+  upBtn.textContent = "↑";
+  upBtn.title = "グループ内で上へ";
+  upBtn.disabled = memberIdx <= 0;
+  upBtn.addEventListener("click", () => moveWorker(w.id, -1));
+  const downBtn = document.createElement("button");
+  downBtn.type = "button";
+  downBtn.className = "btn-icon";
+  downBtn.textContent = "↓";
+  downBtn.title = "グループ内で下へ";
+  downBtn.disabled = memberIdx >= section.members.length - 1;
+  downBtn.addEventListener("click", () => moveWorker(w.id, 1));
+  orderTd.append(upBtn, downBtn);
+
+  const actTd = document.createElement("td");
+  const delBtn = document.createElement("button");
+  delBtn.type = "button";
+  delBtn.className = "btn-icon";
+  delBtn.textContent = "削除";
+  delBtn.addEventListener("click", () => {
+    if (!confirm(`${w.name} を削除しますか？`)) return;
+    delete state.preferences[w.name];
+    state.workers = state.workers.filter((x) => x.id !== w.id);
+    renderWorkers();
+    renderTeams();
+    renderTeamAssignment();
+    persist();
+  });
+  actTd.appendChild(delBtn);
+
+  tr.append(nameTd, teamTd, subTd, supTd, offTd, orderTd, actTd);
+  return tr;
+}
+
+function createOrderButtons({ onUp, onDown, upDisabled, downDisabled, upTitle = "上へ", downTitle = "下へ" }) {
+  const orderTd = document.createElement("td");
+  orderTd.className = "order-cell";
+  const upBtn = document.createElement("button");
+  upBtn.type = "button";
+  upBtn.className = "btn-icon";
+  upBtn.textContent = "↑";
+  upBtn.title = upTitle;
+  upBtn.disabled = upDisabled;
+  upBtn.addEventListener("click", onUp);
+  const downBtn = document.createElement("button");
+  downBtn.type = "button";
+  downBtn.className = "btn-icon";
+  downBtn.textContent = "↓";
+  downBtn.title = downTitle;
+  downBtn.disabled = downDisabled;
+  downBtn.addEventListener("click", onDown);
+  orderTd.append(upBtn, downBtn);
+  return orderTd;
+}
+
+function moveWorker(workerId, delta) {
+  if (!moveWorkerWithinSection(state.workers, workerId, delta, state.teams, state.subGroups)) return;
+  renderWorkers();
+  renderTeamAssignment();
+  if (state.lastResult) renderShiftResult(state.lastResult);
+  persist();
+}
+
+function moveTeam(idx, delta) {
+  if (!moveTeamOrder(state.teams, idx, delta)) return;
+  renderTeams();
+  renderWorkers();
+  renderTeamAssignment();
+  persist();
+}
+
+function moveSubGroup(subGroupId, delta) {
+  if (!moveSubGroupOrder(state.subGroups, subGroupId, delta)) return;
+  renderTeams();
   renderWorkers();
   renderTeamAssignment();
   persist();
@@ -649,16 +710,26 @@ function renderTeamAssignment() {
   if (!tbody) return;
 
   tbody.innerHTML = "";
-  state.workers.forEach((w) => {
-    const tr = document.createElement("tr");
-    const nameTd = document.createElement("td");
-    nameTd.textContent = w.name;
-    const teamTd = document.createElement("td");
-    teamTd.appendChild(createTeamSelect(w));
-    const subTd = document.createElement("td");
-    subTd.appendChild(createSubGroupSelect(w));
-    tr.append(nameTd, teamTd, subTd);
-    tbody.appendChild(tr);
+  getWorkerSections(state.workers, state.teams, state.subGroups).forEach((section) => {
+    const headerTr = document.createElement("tr");
+    headerTr.className = "group-header-row";
+    const headerTd = document.createElement("td");
+    headerTd.colSpan = 3;
+    headerTd.textContent = section.label;
+    headerTr.appendChild(headerTd);
+    tbody.appendChild(headerTr);
+
+    section.members.forEach((w) => {
+      const tr = document.createElement("tr");
+      const nameTd = document.createElement("td");
+      nameTd.textContent = w.name;
+      const teamTd = document.createElement("td");
+      teamTd.appendChild(createTeamSelect(w));
+      const subTd = document.createElement("td");
+      subTd.appendChild(createSubGroupSelect(w));
+      tr.append(nameTd, teamTd, subTd);
+      tbody.appendChild(tr);
+    });
   });
 
   const noWorkers = $("#teams-assignment-empty");
@@ -786,6 +857,15 @@ function renderTeams() {
     });
     confTd.appendChild(confChk);
 
+    const orderTd = createOrderButtons({
+      onUp: () => moveTeam(idx, -1),
+      onDown: () => moveTeam(idx, 1),
+      upDisabled: idx === 0,
+      downDisabled: idx === state.teams.length - 1,
+      upTitle: "メイングループを上へ",
+      downTitle: "メイングループを下へ",
+    });
+
     const actTd = document.createElement("td");
     const delBtn = document.createElement("button");
     delBtn.type = "button";
@@ -809,7 +889,7 @@ function renderTeams() {
     });
     actTd.appendChild(delBtn);
 
-    tr.append(nameTd, membersTd, minTd, maxTd, confTd, actTd);
+    tr.append(nameTd, membersTd, minTd, maxTd, confTd, orderTd, actTd);
     tbody.appendChild(tr);
   });
 
@@ -880,6 +960,15 @@ function renderSubGroups() {
     });
     confTd.appendChild(confChk);
 
+    const orderTd = createOrderButtons({
+      onUp: () => moveSubGroup(sg.id, -1),
+      onDown: () => moveSubGroup(sg.id, 1),
+      upDisabled: !canMoveSubGroupUp(state.subGroups, sg.id),
+      downDisabled: !canMoveSubGroupDown(state.subGroups, sg.id),
+      upTitle: "サブグループを上へ（同一メイングループ内）",
+      downTitle: "サブグループを下へ（同一メイングループ内）",
+    });
+
     const actTd = document.createElement("td");
     const delBtn = document.createElement("button");
     delBtn.type = "button";
@@ -899,7 +988,7 @@ function renderSubGroups() {
     });
     actTd.appendChild(delBtn);
 
-    tr.append(teamTd, nameTd, membersTd, minTd, maxTd, confTd, actTd);
+    tr.append(teamTd, nameTd, membersTd, minTd, maxTd, confTd, orderTd, actTd);
     tbody.appendChild(tr);
   });
 }
@@ -1031,29 +1120,32 @@ function renderShiftResult(result) {
   }
   html += "</tr></thead><tbody>";
 
-  workers.forEach((w) => {
-    const team = teams.find((t) => t.id === w.teamId);
-    const subGroup = state.subGroups?.find((sg) => sg.id === w.subGroupId);
-    const groupLabel = [team?.name, subGroup?.name].filter(Boolean).join(" / ");
-    html += `<tr><td class="sticky-col">${escapeHtml(w.name)}${w.isSupervisor ? " ★" : ""}${groupLabel ? `<br><small>${escapeHtml(groupLabel)}</small>` : ""}</td>`;
-    for (let d = 1; d <= days; d++) {
-      const cell = assignments[w.id][d];
-      let label = formatCellDisplay(cell, useTypes);
-      const isConf = isConferenceDayForWorker(conferenceDays, w, d);
-      let cls = "cell-off";
-      if (cell?.type === "half-off") {
-        cls = cell.half === "am" ? "cell-half-am" : "cell-half-pm";
-      } else if (cell?.type === "work") {
-        cls = w.isSupervisor ? "cell-supervisor" : "cell-work";
-        if (isConf) {
-          cls += " cell-conference";
-          label = useTypes && cell.shiftType ? `${cell.shiftType}・会` : "会";
+  getWorkerSections(workers, teams, subGroups).forEach((section) => {
+    html += `<tr class="group-header-row"><td class="sticky-col" colspan="${days + 1}">${escapeHtml(section.label)}</td></tr>`;
+    section.members.forEach((w) => {
+      const team = teams.find((t) => t.id === w.teamId);
+      const subGroup = subGroups.find((sg) => sg.id === w.subGroupId);
+      const groupLabel = [team?.name, subGroup?.name].filter(Boolean).join(" / ");
+      html += `<tr><td class="sticky-col">${escapeHtml(w.name)}${w.isSupervisor ? " ★" : ""}${groupLabel ? `<br><small>${escapeHtml(groupLabel)}</small>` : ""}</td>`;
+      for (let d = 1; d <= days; d++) {
+        const cell = assignments[w.id][d];
+        let label = formatCellDisplay(cell, useTypes);
+        const isConf = isConferenceDayForWorker(conferenceDays, w, d);
+        let cls = "cell-off";
+        if (cell?.type === "half-off") {
+          cls = cell.half === "am" ? "cell-half-am" : "cell-half-pm";
+        } else if (cell?.type === "work") {
+          cls = w.isSupervisor ? "cell-supervisor" : "cell-work";
+          if (isConf) {
+            cls += " cell-conference";
+            label = useTypes && cell.shiftType ? `${cell.shiftType}・会` : "会";
+          }
         }
+        const title = isConf ? `${label}（カンファレンス日）` : label;
+        html += `<td class="${cls}" title="${escapeHtml(title)}">${escapeHtml(label)}</td>`;
       }
-      const title = isConf ? `${label}（カンファレンス日）` : label;
-      html += `<td class="${cls}" title="${escapeHtml(title)}">${escapeHtml(label)}</td>`;
-    }
-    html += "</tr>";
+      html += "</tr>";
+    });
   });
 
   html += "</tbody><tfoot><tr class='shift-total-row'>";
