@@ -1,7 +1,6 @@
-const STORAGE_KEY = "shift-app-v1";
+export { APP_VERSION } from "./version.js";
 
-/** 画面右下に表示。更新後にここが変わっていれば最新版です */
-export const APP_VERSION = "1.4.0";
+const STORAGE_KEY = "shift-app-v1";
 
 function emptyDefaults() {
   return {

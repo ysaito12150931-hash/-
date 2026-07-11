@@ -97,14 +97,14 @@ function bindBasic() {
   });
 
   $("#save-settings").addEventListener("click", () => {
-    readBasicFromForm();
+    readAllFromForm();
     persist();
     alert("設定を保存しました。");
   });
 
   ["target-year", "target-month", "max-consecutive-work"].forEach((id) => {
     document.getElementById(id).addEventListener("change", () => {
-      readBasicFromForm();
+      readAllFromForm();
       persist();
     });
   });
@@ -313,7 +313,7 @@ function bindConstraints() {
 
 function bindExcel() {
   $("#download-template").addEventListener("click", () => {
-    readBasicFromForm();
+    readAllFromForm();
     const wb = buildTemplateWorkbook(state);
     downloadWorkbook(wb, `勤務希望テンプレート_${state.year}年${state.month}月.xlsx`);
   });
@@ -326,7 +326,7 @@ function bindExcel() {
     status.className = "status-msg";
 
     try {
-      readBasicFromForm();
+      readAllFromForm();
       const wb = await readWorkbookFromFile(file);
       const names = state.workers.map((w) => w.name);
       const { preferences, warnings } = parsePreferenceSheet(wb, names, state.year, state.month);
@@ -437,9 +437,48 @@ function readConstraintsFromForm() {
   state.constraints.supervisorMax = parseInt($("#supervisor-max").value, 10);
 }
 
+function readWorkersFromForm() {
+  const tbody = $("#workers-tbody");
+  if (!tbody) return;
+
+  tbody.querySelectorAll("tr[data-worker-id]").forEach((tr) => {
+    const w = state.workers.find((x) => x.id === tr.dataset.workerId);
+    if (!w) return;
+
+    const nameInput = tr.querySelector('input[type="text"]');
+    const offInput = tr.querySelector(".worker-off-days");
+    const supChk = tr.querySelector('input[type="checkbox"]');
+    const teamSel = tr.querySelector(".team-select");
+    const subSel = tr.querySelector(".subgroup-select");
+
+    if (nameInput) {
+      const newName = nameInput.value.trim();
+      if (newName && newName !== w.name) {
+        const old = w.name;
+        if (state.preferences[old]) {
+          state.preferences[newName] = state.preferences[old];
+          delete state.preferences[old];
+        }
+        w.name = newName;
+      }
+    }
+    if (offInput) w.monthlyOffDays = parseInt(offInput.value, 10) || 0;
+    if (supChk) w.isSupervisor = supChk.checked;
+    if (teamSel) {
+      w.teamId = teamSel.value || null;
+      if (w.subGroupId) {
+        const sg = state.subGroups.find((g) => g.id === w.subGroupId);
+        if (!sg || sg.teamId !== w.teamId) w.subGroupId = null;
+      }
+    }
+    if (subSel && !subSel.disabled) w.subGroupId = subSel.value || null;
+  });
+}
+
 function readAllFromForm() {
   readBasicFromForm();
   readConstraintsFromForm();
+  readWorkersFromForm();
 }
 
 function persist() {
@@ -491,6 +530,7 @@ function renderShiftTypes() {
 }
 
 function renderWorkers() {
+  readWorkersFromForm();
   const tbody = $("#workers-tbody");
   tbody.innerHTML = "";
   const sections = getWorkerSections(state.workers, state.teams, state.subGroups);
@@ -523,6 +563,7 @@ function renderWorkers() {
 
 function createWorkerRow(w, section) {
   const tr = document.createElement("tr");
+  tr.dataset.workerId = w.id;
 
   const nameTd = document.createElement("td");
   const nameInput = document.createElement("input");
@@ -558,14 +599,17 @@ function createWorkerRow(w, section) {
 
   const offTd = document.createElement("td");
   const offInput = document.createElement("input");
+  offInput.className = "worker-off-days";
   offInput.type = "number";
   offInput.min = 0;
   offInput.max = 31;
   offInput.value = w.monthlyOffDays;
-  offInput.addEventListener("change", () => {
+  const syncOffDays = () => {
     w.monthlyOffDays = parseInt(offInput.value, 10) || 0;
     persist();
-  });
+  };
+  offInput.addEventListener("input", syncOffDays);
+  offInput.addEventListener("change", syncOffDays);
   offTd.appendChild(offInput);
 
   const orderTd = document.createElement("td");

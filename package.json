@@ -3,6 +3,10 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "npx --yes serve . -p 3456"
+    "sync-version": "node scripts/sync-html-version.mjs",
+    "start": "node scripts/sync-html-version.mjs && npx --yes serve . -p 3456"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
   }
 }

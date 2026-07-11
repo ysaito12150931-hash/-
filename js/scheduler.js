@@ -46,6 +46,23 @@ export function generateShift(state) {
         `${w.name}: 出勤希望・半休が多く、月間休み日数（${w.monthlyOffDays}日）を満たしにくい可能性があります。`
       );
     }
+
+    const lockedOffCount = countLockedOffDays(lockedOff, w.id, days);
+    const effectiveLockedOff = lockedOffCount + halfOffCount * 0.5;
+    const target = w.monthlyOffDays ?? 0;
+    if (Math.abs(target - effectiveLockedOff) < 0.001) {
+      const row = {};
+      for (let d = 1; d <= days; d++) {
+        if (lockedOff[w.id]?.[d]) row[d] = false;
+        else if (halfOff[w.id]?.[d]) row[d] = true;
+        else row[d] = true;
+      }
+      if (violatesConsecutiveWork(row, days, maxConsecutiveWork)) {
+        messages.push(
+          `${w.name}: Excel希望休が月間休み日数（${formatOffDays(target)}日）と一致するため残りは全出勤になりますが、連勤上限（${maxConsecutiveWork}日）を超えます。休み希望の日を分散するか、月間休み日数・連勤上限を見直してください。`
+        );
+      }
+    }
   }
 
   let best = null;
