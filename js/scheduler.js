@@ -417,13 +417,9 @@ function isOffTargetFixedByPreferences(w, days, lockedOff, halfOff, targetOff) {
 }
 
 function collectScheduleHints(workers, days, lockedOff, lockedWork, halfOff, constraints, maxConsecutiveWork) {
+  void constraints;
+  void maxConsecutiveWork;
   const hints = [];
-  const supervisors = workers.filter((w) => w.isSupervisor);
-  if (supervisors.length > 0 && constraints.supervisorMax < supervisors.length) {
-    hints.push(
-      `責任者が${supervisors.length}名いますが、1日あたりの責任者上限が${constraints.supervisorMax}名です。上限を${supervisors.length}名以上にすると生成しやすくなります。`
-    );
-  }
   for (const w of workers) {
     const target = w.monthlyOffDays ?? 0;
     if (isOffTargetFixedByPreferences(w, days, lockedOff, halfOff, target)) continue;
@@ -434,6 +430,16 @@ function collectScheduleHints(workers, days, lockedOff, lockedWork, halfOff, con
     }
   }
   return hints;
+}
+
+export function countWorkerOffDaysFromAssignments(assignments, workerId, days) {
+  let n = 0;
+  for (let d = 1; d <= days; d++) {
+    const cell = assignments[workerId]?.[d];
+    if (!cell || cell.type === "off") n += 1;
+    else if (cell.type === "half-off") n += 0.5;
+  }
+  return n;
 }
 
 function tryBuildSchedule(ctx) {

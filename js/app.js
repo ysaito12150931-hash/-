@@ -19,6 +19,7 @@ import {
 import {
   generateShift,
   formatCellDisplay,
+  countWorkerOffDaysFromAssignments,
   getConferenceTeamsOnDay,
   getConferenceSubGroupsOnDay,
   isConferenceDayForWorker,
@@ -362,10 +363,11 @@ function bindShift() {
       if (!result.ok) {
         status.textContent = result.messages.join(" ");
         status.className = "status-msg error";
+        $("#shift-print-root")?.classList.add("hidden");
         return;
       }
 
-      state.lastResult = result;
+      state.lastResult = { ...result, workers: state.workers.map((w) => ({ ...w })) };
       persist();
       status.textContent = result.messages.join(" ");
       status.className = result.messages.some((m) => m.includes("超え"))
@@ -559,6 +561,7 @@ function renderWorkers() {
   renderNewWorkerTeamSelect();
   renderNewWorkerSubGroupSelect();
   renderTeamWorkerStats();
+  renderSupervisorStats();
 }
 
 function createWorkerRow(w, section) {
@@ -1059,6 +1062,19 @@ function renderNewSubgroupTeamSelect() {
 function renderConstraints() {
   $("#supervisor-min").value = state.constraints.supervisorMin;
   $("#supervisor-max").value = state.constraints.supervisorMax;
+  renderSupervisorStats();
+}
+
+function renderSupervisorStats() {
+  const el = $("#supervisor-registered-hint");
+  if (!el) return;
+  const supervisors = state.workers.filter((w) => w.isSupervisor);
+  if (!supervisors.length) {
+    el.textContent =
+      "現在、責任者として登録されている勤務者はいません。「勤務者」タブのチェックで設定します。";
+    return;
+  }
+  el.textContent = `責任者として登録: ${supervisors.length} 名（${supervisors.map((w) => w.name).join("、")}）。ここで設定するのは1日あたりの人数で、登録人数とは別です。`;
 }
 
 function renderPreferencePreview() {
@@ -1092,7 +1108,8 @@ function renderPreferencePreview() {
 }
 
 function renderShiftResult(result) {
-  const { year, month, assignments, workers, stats, conferenceDays: rawConf = {}, teams = state.teams } = result;
+  const { year, month, assignments, stats, conferenceDays: rawConf = {}, teams = state.teams } = result;
+  const workers = state.workers;
   const conferenceDays = normalizeConferenceDays(rawConf);
   const subGroups = state.subGroups ?? [];
   const days = getDaysInMonth(year, month);
@@ -1162,14 +1179,17 @@ function renderShiftResult(result) {
     const confBadge = confLabels.length ? '<br><small class="conf-badge">会</small>' : "";
     html += `<th class="${thCls}"${confHint}>${d}<br><small>${dow}</small>${confBadge}</th>`;
   }
-  html += "</tr></thead><tbody>";
+  html += "<th class='shift-off-col'>休み<br><small>日数</small></th></tr></thead><tbody>";
 
   getWorkerSections(workers, teams, subGroups).forEach((section) => {
-    html += `<tr class="group-header-row"><td class="sticky-col" colspan="${days + 1}">${escapeHtml(section.label)}</td></tr>`;
+    html += `<tr class="group-header-row"><td class="sticky-col" colspan="${days + 2}">${escapeHtml(section.label)}</td></tr>`;
     section.members.forEach((w) => {
       const team = teams.find((t) => t.id === w.teamId);
       const subGroup = subGroups.find((sg) => sg.id === w.subGroupId);
       const groupLabel = [team?.name, subGroup?.name].filter(Boolean).join(" / ");
+      const actualOff = countWorkerOffDaysFromAssignments(assignments, w.id, days);
+      const targetOff = w.monthlyOffDays ?? 0;
+      const offMatch = Math.abs(actualOff - targetOff) < 0.001;
       html += `<tr><td class="sticky-col">${escapeHtml(w.name)}${w.isSupervisor ? " ★" : ""}${groupLabel ? `<br><small>${escapeHtml(groupLabel)}</small>` : ""}</td>`;
       for (let d = 1; d <= days; d++) {
         const cell = assignments[w.id][d];
@@ -1188,7 +1208,7 @@ function renderShiftResult(result) {
         const title = isConf ? `${label}（カンファレンス日）` : label;
         html += `<td class="${cls}" title="${escapeHtml(title)}">${escapeHtml(label)}</td>`;
       }
-      html += "</tr>";
+      html += `<td class="shift-off-col${offMatch ? "" : " shift-off-mismatch"}" title="目標 ${targetOff} 日">${formatOffDaysDisplay(actualOff, targetOff)}</td></tr>`;
     });
   });
 
@@ -1200,7 +1220,7 @@ function renderShiftResult(result) {
       workers.filter((w) => assignments[w.id][d]?.type !== "off").length;
     html += `<td class="shift-total-cell">${total}</td>`;
   }
-  html += "</tr></tfoot></table>";
+  html += "<td class='shift-off-col'></td></tr></tfoot></table>";
   wrap.innerHTML = html;
 }
 
@@ -1210,6 +1230,12 @@ function escapeHtml(s) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function formatOffDaysDisplay(actual, target) {
+  const actualText = Number.isInteger(actual) ? String(actual) : actual.toFixed(1);
+  const targetText = Number.isInteger(target) ? String(target) : target.toFixed(1);
+  return `${actualText}/${targetText}`;
 }
 
 init();

@@ -505,6 +505,18 @@ select.team-select {
   color: #1e293b;
 }
 
+.shift-off-col {
+  background: #f8fafc;
+  font-weight: 600;
+  white-space: nowrap;
+  min-width: 3.5rem;
+}
+
+.shift-off-mismatch {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 .th-conference {
   background: #a7f3d0 !important;
 }
