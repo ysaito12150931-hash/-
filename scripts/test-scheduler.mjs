@@ -9,6 +9,9 @@ state.workers = [
   { id: "4", name: "高橋", teamId: null, isSupervisor: false, monthlyOffDays: 8 },
   { id: "5", name: "伊藤", teamId: null, isSupervisor: true, monthlyOffDays: 8 },
 ];
+state.workers.forEach((w, i) => {
+  w.teamId = state.teams[i % state.teams.length]?.id ?? null;
+});
 state.constraints = { supervisorMin: 1, supervisorMax: 2 };
 state.year = 2026;
 state.month = 5;
