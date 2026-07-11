@@ -1,6 +1,6 @@
 import { getDaysInMonth } from "./store.js";
 
-const MAX_ATTEMPTS = 300;
+const MAX_ATTEMPTS = 500;
 
 /**
  * @returns {{ ok: boolean, assignments?: object, messages: string[], stats?: object, year?: number, month?: number, workers?: object[] }}
@@ -33,6 +33,11 @@ export function generateShift(state) {
   for (const w of workers) {
     const pref = preferences[w.name] || {};
     const prefOffTotal = countPreferenceOffDays(pref, days);
+    const achievable = validateOffTargetAchievable(w, days, lockedOff, halfOff, w.monthlyOffDays ?? 0);
+    if (!achievable.ok) {
+      messages.push(achievable.message);
+      return { ok: false, messages };
+    }
     if (prefOffTotal > (w.monthlyOffDays ?? 0)) {
       messages.push(
         `${w.name}: Excel希望休（${formatOffDays(prefOffTotal)}日）が月間休み日数（${w.monthlyOffDays}日）を超えています。`
@@ -97,6 +102,12 @@ export function generateShift(state) {
 
   if (!best) {
     const hints = collectScheduleHints(workers, days, lockedOff, lockedWork, halfOff, constraints, maxConsecutiveWork);
+    const supervisorCount = workers.filter((w) => w.isSupervisor).length;
+    if (supervisorCount > constraints.supervisorMax) {
+      hints.unshift(
+        `責任者登録${supervisorCount}名に対し、1日あたりの上限が${constraints.supervisorMax}名です。上限を${supervisorCount}名以上にするか、責任者登録を減らしてください。`
+      );
+    }
     return {
       ok: false,
       messages: [
@@ -262,6 +273,51 @@ function offCandidateDays(row, days, w, lockedOff, lockedWork, halfOff) {
   return candidates.map((c) => c.d);
 }
 
+function applyAllPreferenceLocks(grid, workers, days, lockedOff, lockedWork, halfOff) {
+  for (const w of workers) {
+    applyPreferenceLocksToGrid(grid, w, days, lockedOff, lockedWork, halfOff);
+  }
+}
+
+function balanceOffTargets(grid, workers, days, targets, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, requireSupervisor, rng, maxPasses) {
+  for (let pass = 0; pass < maxPasses; pass++) {
+    let changed = false;
+    for (const w of shuffledArray(workers, rng)) {
+      const cur = countEffectiveOffDays(grid, w.id, days, halfOff);
+      const target = targets[w.id];
+      if (cur < target - 0.001) {
+        if (
+          tryAddOff(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, workers, requireSupervisor, rng) ||
+          trySwapForOff(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, workers, requireSupervisor, rng)
+        ) {
+          changed = true;
+        }
+      } else if (cur > target + 0.001) {
+        if (
+          tryAddWork(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, workers, requireSupervisor, rng) ||
+          trySwapForWork(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, workers, requireSupervisor, rng)
+        ) {
+          changed = true;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+}
+
+function repairAllDays(grid, workers, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, requireSupervisor, rng, maxPasses) {
+  for (let pass = 0; pass < maxPasses; pass++) {
+    let fixed = false;
+    for (let d = 1; d <= days; d++) {
+      if (validateDay(grid, workers, d, groupCtx, requireSupervisor).ok) continue;
+      if (repairDay(grid, workers, d, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, requireSupervisor, rng)) {
+        fixed = true;
+      }
+    }
+    if (!fixed) break;
+  }
+}
+
 function applyPreferenceLocksToGrid(grid, w, days, lockedOff, lockedWork, halfOff) {
   for (let d = 1; d <= days; d++) {
     if (lockedOff[w.id]?.[d]) grid[w.id][d] = false;
@@ -400,7 +456,36 @@ function trySwapForWork(grid, w, days, lockedOff, lockedWork, halfOff, maxConsec
   return false;
 }
 
+function countLockedEffectiveOffDays(lockedOff, halfOff, workerId, days) {
+  return countLockedOffDays(lockedOff, workerId, days) + countHalfOffDays(halfOff, workerId, days) * 0.5;
+}
+
+function validateOffTargetAchievable(w, days, lockedOff, halfOff, target) {
+  const locked = countLockedEffectiveOffDays(lockedOff, halfOff, w.id, days);
+  if (target < locked - 0.001) {
+    return {
+      ok: false,
+      message: `${w.name}: Excel希望休（${formatOffDays(locked)}日）が月間休み日数（${formatOffDays(target)}日）を超えています。`,
+    };
+  }
+  const extra = target - locked;
+  if (Math.abs(extra - Math.round(extra)) > 0.001) {
+    const lower = locked + Math.floor(extra);
+    const upper = locked + Math.ceil(extra);
+    const halfCount = countHalfOffDays(halfOff, w.id, days);
+    return {
+      ok: false,
+      message:
+        `${w.name}: Excelの半休${halfCount > 0 ? `（${halfCount}件）` : ""}により希望休が${formatOffDays(locked)}日です。` +
+        `月間休み日数${formatOffDays(target)}日は、残りを1日単位でしか追加できないため一致しません。` +
+        `半休を「休」に変えるか、月間休み日数を${formatOffDays(lower)}日または${formatOffDays(upper)}日に変更してください。`,
+    };
+  }
+  return { ok: true };
+}
+
 function buildFixedWorkerRow(w, days, lockedOff, lockedWork, halfOff) {
+  void lockedWork;
   const row = {};
   for (let d = 1; d <= days; d++) {
     if (lockedOff[w.id]?.[d]) row[d] = false;
@@ -483,74 +568,63 @@ function tryBuildSchedule(ctx) {
   }
 
   const targets = Object.fromEntries(workers.map((w) => [w.id, w.monthlyOffDays ?? 0]));
-  const useSeedFirst = seed % 2 === 0;
+  applyAllPreferenceLocks(grid, workers, days, lockedOff, lockedWork, halfOff);
 
-  if (useSeedFirst) {
-    for (const w of shuffledArray(workers, rng)) {
-      seedWorkerOffDays(grid, w, days, targets[w.id], lockedOff, lockedWork, halfOff, maxConsecutiveWork, rng);
-    }
-  } else {
+  const strategy = seed % 3;
+  if (strategy === 0) {
     for (let d = 1; d <= days; d++) {
       if (!assignDay(grid, workers, d, groupCtx, lockedOff, lockedWork, halfOff, requireSupervisor, rng)) {
         return null;
       }
     }
+  } else if (strategy === 1) {
     for (const w of shuffledArray(workers, rng)) {
-      const cur = countEffectiveOffDays(grid, w.id, days, halfOff);
-      const needed = targets[w.id] - cur;
-      if (needed > 0.001) {
-        spreadAdditionalOffDays(grid, w, days, needed, lockedOff, lockedWork, halfOff, maxConsecutiveWork, rng);
-      }
+      seedWorkerOffDays(grid, w, days, targets[w.id], lockedOff, lockedWork, halfOff, maxConsecutiveWork, rng);
     }
   }
 
-  for (let pass = 0; pass < days * 8; pass++) {
-    let fixed = false;
-    for (let d = 1; d <= days; d++) {
-      if (validateDay(grid, workers, d, groupCtx, requireSupervisor).ok) continue;
-      if (repairDay(grid, workers, d, days, lockedOff, lockedWork, halfOff, maxConsecutiveWork, groupCtx, requireSupervisor, rng)) {
-        fixed = true;
-      }
-    }
-    if (!fixed) break;
-  }
+  repairAllDays(
+    grid,
+    workers,
+    days,
+    lockedOff,
+    lockedWork,
+    halfOff,
+    maxConsecutiveWork,
+    groupCtx,
+    requireSupervisor,
+    rng,
+    days * 8
+  );
 
-  for (let pass = 0; pass < days * workers.length * 8; pass++) {
-    let changed = false;
-    for (const w of shuffledArray(workers, rng)) {
-      const cur = countEffectiveOffDays(grid, w.id, days, halfOff);
-      const target = targets[w.id];
-      if (cur < target - 0.001) {
-        if (
-          tryAddOff(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutiveWork, groupCtx, workers, requireSupervisor, rng) ||
-          trySwapForOff(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutiveWork, groupCtx, workers, requireSupervisor, rng)
-        ) {
-          changed = true;
-        }
-      } else if (cur > target + 0.001) {
-        if (
-          tryAddWork(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutiveWork, groupCtx, workers, requireSupervisor, rng) ||
-          trySwapForWork(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutiveWork, groupCtx, workers, requireSupervisor, rng)
-        ) {
-          changed = true;
-        }
-      }
-    }
-    if (!changed) break;
-  }
+  balanceOffTargets(
+    grid,
+    workers,
+    days,
+    targets,
+    lockedOff,
+    lockedWork,
+    halfOff,
+    maxConsecutiveWork,
+    groupCtx,
+    requireSupervisor,
+    rng,
+    days * workers.length * 16
+  );
 
-  for (let iter = 0; iter < days * workers.length * 3; iter++) {
-    let fixed = false;
-    for (let d = 1; d <= days; d++) {
-      if (validateDay(grid, workers, d, groupCtx, requireSupervisor).ok) {
-        continue;
-      }
-      if (repairDay(grid, workers, d, days, lockedOff, lockedWork, halfOff, maxConsecutiveWork, groupCtx, requireSupervisor, rng)) {
-        fixed = true;
-      }
-    }
-    if (!fixed) break;
-  }
+  repairAllDays(
+    grid,
+    workers,
+    days,
+    lockedOff,
+    lockedWork,
+    halfOff,
+    maxConsecutiveWork,
+    groupCtx,
+    requireSupervisor,
+    rng,
+    days * workers.length * 3
+  );
 
   for (const w of workers) {
     if (!offDaysMatch(countEffectiveOffDays(grid, w.id, days, halfOff), targets[w.id])) return null;

@@ -480,7 +480,7 @@ function readWorkersFromForm() {
         w.name = newName;
       }
     }
-    if (offInput) w.monthlyOffDays = parseInt(offInput.value, 10) || 0;
+    if (offInput) w.monthlyOffDays = parseFloat(offInput.value) || 0;
     if (supChk) w.isSupervisor = supChk.checked;
     if (teamSel) {
       w.teamId = teamSel.value || null;
@@ -622,9 +622,10 @@ function createWorkerRow(w, section) {
   offInput.type = "number";
   offInput.min = 0;
   offInput.max = 31;
+  offInput.step = 0.5;
   offInput.value = w.monthlyOffDays;
   const syncOffDays = () => {
-    w.monthlyOffDays = parseInt(offInput.value, 10) || 0;
+    w.monthlyOffDays = parseFloat(offInput.value) || 0;
     persist();
   };
   offInput.addEventListener("input", syncOffDays);

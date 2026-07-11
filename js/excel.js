@@ -180,7 +180,7 @@ export function parsePreferenceSheet(workbook, workerNames, year, month) {
 
 function parseMonthlyOffDaysCell(value) {
   if (value == null || value === "") return null;
-  const n = parseInt(String(value).trim(), 10);
+  const n = parseFloat(String(value).trim());
   return Number.isNaN(n) ? null : Math.max(0, n);
 }
 
