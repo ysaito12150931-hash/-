@@ -172,6 +172,14 @@ fieldset.card {
   margin: 1rem 0;
 }
 
+.group-supervisor-summary {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin: 1rem 0;
+  background: var(--surface);
+}
+
 fieldset.card legend {
   padding: 0 0.35rem;
   font-weight: 700;
@@ -473,6 +481,12 @@ select.team-select {
   background: var(--off);
 }
 
+.cell-preferred-off {
+  background: #86efac;
+  color: #14532d;
+  font-weight: 600;
+}
+
 .cell-half-am {
   background: #fef3c7;
   color: #92400e;
@@ -645,8 +659,21 @@ select.team-select {
   border-radius: 2px;
 }
 
+.shift-print-legend .legend-preferred-off {
+  display: inline-block;
+  background: #86efac;
+  color: #14532d;
+  padding: 0 0.25rem;
+  border-radius: 2px;
+  font-weight: 600;
+}
+
 .shift-print-legend .legend-supervisor {
   color: #6d28d9;
+}
+
+.shift-print-legend .legend-group-supervisor {
+  color: #0369a1;
 }
 
 @media (max-width: 600px) {
@@ -778,6 +805,11 @@ select.team-select {
 
   .cell-off {
     background: var(--off) !important;
+  }
+
+  .cell-preferred-off {
+    background: #86efac !important;
+    color: #14532d !important;
   }
 
   .cell-half-am {

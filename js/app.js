@@ -131,6 +131,7 @@ function bindWorkers() {
       teamId,
       subGroupId: teamId && subGroupId ? subGroupId : null,
       isSupervisor: false,
+      isGroupSupervisor: false,
       monthlyOffDays: 8,
     });
     $("#new-worker-name").value = "";
@@ -150,7 +151,13 @@ function bindTeams() {
     }
     const id = crypto.randomUUID();
     state.teams.push({ id, name });
-    state.teamConstraints[id] = { min: 0, max: 99, useConferenceDay: false };
+    state.teamConstraints[id] = {
+      min: 0,
+      max: 99,
+      useConferenceDay: false,
+      supervisorMin: 0,
+      supervisorMax: 99,
+    };
     $("#new-team-name").value = "";
     renderTeams();
     renderWorkers();
@@ -183,12 +190,19 @@ function bindTeams() {
 
 function ensureTeamConstraint(teamId) {
   if (!state.teamConstraints[teamId]) {
-    state.teamConstraints[teamId] = { min: 0, max: 99, useConferenceDay: false };
+    state.teamConstraints[teamId] = {
+      min: 0,
+      max: 99,
+      useConferenceDay: false,
+      supervisorMin: 0,
+      supervisorMax: 99,
+    };
   }
-  if (state.teamConstraints[teamId].useConferenceDay == null) {
-    state.teamConstraints[teamId].useConferenceDay = false;
-  }
-  return state.teamConstraints[teamId];
+  const tc = state.teamConstraints[teamId];
+  if (tc.useConferenceDay == null) tc.useConferenceDay = false;
+  if (tc.supervisorMin == null) tc.supervisorMin = 0;
+  if (tc.supervisorMax == null) tc.supervisorMax = 99;
+  return tc;
 }
 
 function ensureSubGroupConstraint(subGroupId) {
@@ -205,6 +219,7 @@ function assignWorkerToTeam(workerId, teamId) {
   const worker = state.workers.find((w) => w.id === workerId);
   if (!worker) return;
   worker.teamId = teamId || null;
+  if (!worker.teamId) worker.isGroupSupervisor = false;
   if (worker.subGroupId) {
     const sg = state.subGroups.find((g) => g.id === worker.subGroupId);
     if (!sg || sg.teamId !== worker.teamId) worker.subGroupId = null;
@@ -213,6 +228,7 @@ function assignWorkerToTeam(workerId, teamId) {
   renderWorkers();
   renderTeams();
   renderTeamAssignment();
+  renderConstraints();
 }
 
 function assignWorkerToSubGroup(workerId, subGroupId) {
@@ -467,7 +483,8 @@ function readWorkersFromForm() {
 
     const nameInput = tr.querySelector('input[type="text"]');
     const offInput = tr.querySelector(".worker-off-days");
-    const supChk = tr.querySelector('input[type="checkbox"]');
+    const supChk = tr.querySelector(".chk-supervisor");
+    const groupSupChk = tr.querySelector(".chk-group-supervisor");
     const teamSel = tr.querySelector(".team-select");
     const subSel = tr.querySelector(".subgroup-select");
 
@@ -484,8 +501,10 @@ function readWorkersFromForm() {
     }
     if (offInput) w.monthlyOffDays = parseFloat(offInput.value) || 0;
     if (supChk) w.isSupervisor = supChk.checked;
+    if (groupSupChk) w.isGroupSupervisor = groupSupChk.checked;
     if (teamSel) {
       w.teamId = teamSel.value || null;
+      if (!w.teamId) w.isGroupSupervisor = false;
       if (w.subGroupId) {
         const sg = state.subGroups.find((g) => g.id === w.subGroupId);
         if (!sg || sg.teamId !== w.teamId) w.subGroupId = null;
@@ -559,7 +578,7 @@ function renderWorkers() {
     const headerTr = document.createElement("tr");
     headerTr.className = "group-header-row";
     const headerTd = document.createElement("td");
-    headerTd.colSpan = 7;
+    headerTd.colSpan = 8;
     headerTd.textContent = section.label;
     headerTr.appendChild(headerTd);
     tbody.appendChild(headerTr);
@@ -610,13 +629,32 @@ function createWorkerRow(w, section) {
   const supTd = document.createElement("td");
   const supChk = document.createElement("input");
   supChk.type = "checkbox";
+  supChk.className = "chk-supervisor";
+  supChk.title = "全体責任者";
   supChk.checked = w.isSupervisor;
   supChk.addEventListener("change", () => {
     w.isSupervisor = supChk.checked;
     renderWorkers();
+    renderConstraints();
     persist();
   });
   supTd.appendChild(supChk);
+
+  const groupSupTd = document.createElement("td");
+  const groupSupChk = document.createElement("input");
+  groupSupChk.type = "checkbox";
+  groupSupChk.className = "chk-group-supervisor";
+  groupSupChk.title = "所属メイングループの責任者（全体責任者と重複可）";
+  groupSupChk.checked = w.isGroupSupervisor;
+  groupSupChk.disabled = !w.teamId;
+  groupSupChk.addEventListener("change", () => {
+    w.isGroupSupervisor = groupSupChk.checked;
+    renderWorkers();
+    renderTeams();
+    renderConstraints();
+    persist();
+  });
+  groupSupTd.appendChild(groupSupChk);
 
   const offTd = document.createElement("td");
   const offInput = document.createElement("input");
@@ -669,7 +707,7 @@ function createWorkerRow(w, section) {
   });
   actTd.appendChild(delBtn);
 
-  tr.append(nameTd, teamTd, subTd, supTd, offTd, orderTd, actTd);
+  tr.append(nameTd, teamTd, subTd, supTd, groupSupTd, offTd, orderTd, actTd);
   return tr;
 }
 
@@ -887,8 +925,23 @@ function renderTeams() {
     const membersTd = document.createElement("td");
     membersTd.className = "team-member-names";
     const members = getWorkersInTeam(t.id);
-    membersTd.textContent = members.length ? members.map((w) => w.name).join("、") : "—";
-    membersTd.title = members.length ? members.map((w) => w.name).join("\n") : "メンバー未割り当て";
+    const memberLabels = members.map((w) => {
+      const marks = [];
+      if (w.isSupervisor) marks.push("★");
+      if (w.isGroupSupervisor) marks.push("◆");
+      return marks.length ? `${w.name}${marks.join("")}` : w.name;
+    });
+    membersTd.textContent = memberLabels.length ? memberLabels.join("、") : "—";
+    membersTd.title = members.length
+      ? members
+          .map((w) => {
+            const marks = [];
+            if (w.isSupervisor) marks.push("全体責任者");
+            if (w.isGroupSupervisor) marks.push("グループ責任者");
+            return marks.length ? `${w.name}（${marks.join("・")}）` : w.name;
+          })
+          .join("\n")
+      : "メンバー未割り当て";
 
     const minTd = document.createElement("td");
     const minInput = document.createElement("input");
@@ -911,6 +964,32 @@ function renderTeams() {
       persist();
     });
     maxTd.appendChild(maxInput);
+
+    const supMinTd = document.createElement("td");
+    const supMinInput = document.createElement("input");
+    supMinInput.type = "number";
+    supMinInput.min = 0;
+    supMinInput.value = tc.supervisorMin ?? 0;
+    supMinInput.title = "グループ責任者の1日あたり下限";
+    supMinInput.addEventListener("change", () => {
+      state.teamConstraints[t.id].supervisorMin = parseInt(supMinInput.value, 10) || 0;
+      renderConstraints();
+      persist();
+    });
+    supMinTd.appendChild(supMinInput);
+
+    const supMaxTd = document.createElement("td");
+    const supMaxInput = document.createElement("input");
+    supMaxInput.type = "number";
+    supMaxInput.min = 0;
+    supMaxInput.value = tc.supervisorMax ?? 99;
+    supMaxInput.title = "グループ責任者の1日あたり上限";
+    supMaxInput.addEventListener("change", () => {
+      state.teamConstraints[t.id].supervisorMax = parseInt(supMaxInput.value, 10) || 0;
+      renderConstraints();
+      persist();
+    });
+    supMaxTd.appendChild(supMaxInput);
 
     const confTd = document.createElement("td");
     const confChk = document.createElement("input");
@@ -943,6 +1022,7 @@ function renderTeams() {
         if (w.teamId === t.id) {
           w.teamId = null;
           w.subGroupId = null;
+          w.isGroupSupervisor = false;
         }
       });
       deleteSubGroupsForTeam(t.id);
@@ -951,11 +1031,12 @@ function renderTeams() {
       renderTeams();
       renderWorkers();
       renderTeamAssignment();
+      renderConstraints();
       persist();
     });
     actTd.appendChild(delBtn);
 
-    tr.append(nameTd, membersTd, minTd, maxTd, confTd, orderTd, actTd);
+    tr.append(nameTd, membersTd, minTd, maxTd, supMinTd, supMaxTd, confTd, orderTd, actTd);
     tbody.appendChild(tr);
   });
 
@@ -1082,10 +1163,40 @@ function renderConstraints() {
   $("#supervisor-min").value = state.constraints.supervisorMin;
   $("#supervisor-max").value = state.constraints.supervisorMax;
   renderSupervisorStats();
+  renderGroupSupervisorConstraintsSummary();
+}
+
+function renderGroupSupervisorConstraintsSummary() {
+  const wrap = $("#group-supervisor-constraints-summary");
+  if (!wrap) return;
+  if (!state.teams.length) {
+    wrap.innerHTML = `<h3 class="section-subheading">グループ責任者（1日あたり）</h3><p class="hint">メイングループが未作成です。「グループ」タブで設定してください。</p>`;
+    return;
+  }
+  let html = `<h3 class="section-subheading">グループ責任者（1日あたり）</h3>
+    <p class="hint">下限・上限の変更は「グループ」タブのメイングループ表で行います。</p>
+    <div class="table-wrap"><table class="data-table"><thead><tr>
+      <th>メイングループ</th><th>登録責任者</th><th>下限</th><th>上限</th>
+    </tr></thead><tbody>`;
+  for (const team of state.teams) {
+    const tc = ensureTeamConstraint(team.id);
+    const supers = state.workers.filter((w) => w.isGroupSupervisor && w.teamId === team.id);
+    const names = supers.map((w) => w.name).join("、") || "—";
+    const over = supers.length > (tc.supervisorMax ?? 99);
+    html += `<tr${over ? ' class="supervisor-stats-warn"' : ""}>
+      <td>${escapeHtml(team.name)}</td>
+      <td title="${escapeHtml(names)}">${supers.length} 名（${escapeHtml(names)}）</td>
+      <td>${tc.supervisorMin ?? 0}</td>
+      <td>${tc.supervisorMax ?? 99}</td>
+    </tr>`;
+  }
+  html += "</tbody></table></div>";
+  wrap.innerHTML = html;
 }
 
 function renderSupervisorStats() {
   const supervisors = state.workers.filter((w) => w.isSupervisor);
+  const groupSupervisors = state.workers.filter((w) => w.isGroupSupervisor);
   const count = supervisors.length;
   const names = supervisors.map((w) => w.name);
   const namesText = names.length ? names.join("、") : "—";
@@ -1094,6 +1205,9 @@ function renderSupervisorStats() {
 
   const countEl = $("#supervisor-registered-count");
   if (countEl) countEl.textContent = String(count);
+
+  const groupCountEl = $("#group-supervisor-registered-count");
+  if (groupCountEl) groupCountEl.textContent = String(groupSupervisors.length);
 
   const countConstraintsEl = $("#supervisor-registered-count-constraints");
   if (countConstraintsEl) countConstraintsEl.textContent = String(count);
@@ -1119,13 +1233,13 @@ function renderSupervisorStats() {
   if (!hintEl) return;
   if (!count) {
     hintEl.textContent =
-      "現在、責任者として登録されている勤務者はいません。「勤務者」タブのチェックで設定します。";
+      "現在、全体責任者として登録されている勤務者はいません。「勤務者」タブのチェックで設定します。";
     hintEl.className = "hint warn-hint";
   } else if (overMax) {
-    hintEl.textContent = `登録 ${count} 名ですが、1日あたりの上限は ${max} 名です。上限を ${count} 名以上にするか、責任者登録を減らしてください。`;
+    hintEl.textContent = `登録 ${count} 名ですが、1日あたりの上限は ${max} 名です。上限を ${count} 名以上にするか、全体責任者登録を減らしてください。`;
     hintEl.className = "hint warn-hint";
   } else {
-    hintEl.textContent = `登録者: ${namesText}。上の「上限」は1日に出勤する責任者の人数です（登録人数とは別）。`;
+    hintEl.textContent = `登録者: ${namesText}。上の「上限」は1日に出勤する全体責任者の人数です（登録人数とは別）。`;
     hintEl.className = "hint";
   }
 }
@@ -1273,12 +1387,14 @@ function renderShiftResult(result) {
       const actualOff = countWorkerOffDaysFromAssignments(assignments, w.id, days);
       const targetOff = w.monthlyOffDays ?? 0;
       const offMatch = Math.abs(actualOff - targetOff) < 0.001;
-      html += `<tr><td class="sticky-col">${escapeHtml(w.name)}${w.isSupervisor ? " ★" : ""}${groupLabel ? `<br><small>${escapeHtml(groupLabel)}</small>` : ""}</td>`;
+      html += `<tr><td class="sticky-col">${escapeHtml(w.name)}${w.isSupervisor ? " ★" : ""}${w.isGroupSupervisor ? " ◆" : ""}${groupLabel ? `<br><small>${escapeHtml(groupLabel)}</small>` : ""}</td>`;
       for (let d = 1; d <= days; d++) {
         const cell = assignments[w.id][d];
         let label = formatCellDisplay(cell, useTypes);
         const confGroup = getWorkerConferenceGroup(conferenceDays, w, d);
-        let cls = "cell-off";
+        const pref = state.preferences[w.name]?.[d];
+        const isPreferredOff = cell?.type === "off" && (pref === "off" || pref === true);
+        let cls = isPreferredOff ? "cell-preferred-off" : "cell-off";
         let cellStyle = "";
         if (cell?.type === "half-off") {
           cls = cell.half === "am" ? "cell-half-am" : "cell-half-pm";
@@ -1301,7 +1417,10 @@ function renderShiftResult(result) {
                 const t = teams.find((x) => x.id === sg?.teamId);
                 return sg ? (t ? `${t.name}/${sg.name}` : sg.name) : "";
               })());
-        const title = confName ? `${label}（${confName} カンファレンス）` : label;
+        const titleParts = [label];
+        if (isPreferredOff) titleParts.push("希望休");
+        if (confName) titleParts.push(`${confName} カンファレンス`);
+        const title = titleParts.join(" · ");
         html += `<td class="${cls}"${cellStyle} title="${escapeHtml(title)}">${escapeHtml(label)}</td>`;
       }
       html += `<td class="shift-off-col${offMatch ? "" : " shift-off-mismatch"}" title="目標 ${targetOff} 日">${formatOffDaysDisplay(actualOff, targetOff)}</td></tr>`;

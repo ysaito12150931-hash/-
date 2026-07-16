@@ -29,14 +29,38 @@ export const defaultState = () => {
   return {
     ...emptyDefaults(),
     workers: [
-      { id: crypto.randomUUID(), name: "田中", teamId: teamA.id, subGroupId: null, isSupervisor: true, monthlyOffDays: 8 },
-      { id: crypto.randomUUID(), name: "佐藤", teamId: teamA.id, subGroupId: null, isSupervisor: false, monthlyOffDays: 9 },
-      { id: crypto.randomUUID(), name: "鈴木", teamId: teamB.id, subGroupId: null, isSupervisor: false, monthlyOffDays: 9 },
+      {
+        id: crypto.randomUUID(),
+        name: "田中",
+        teamId: teamA.id,
+        subGroupId: null,
+        isSupervisor: true,
+        isGroupSupervisor: true,
+        monthlyOffDays: 8,
+      },
+      {
+        id: crypto.randomUUID(),
+        name: "佐藤",
+        teamId: teamA.id,
+        subGroupId: null,
+        isSupervisor: false,
+        isGroupSupervisor: false,
+        monthlyOffDays: 9,
+      },
+      {
+        id: crypto.randomUUID(),
+        name: "鈴木",
+        teamId: teamB.id,
+        subGroupId: null,
+        isSupervisor: false,
+        isGroupSupervisor: false,
+        monthlyOffDays: 9,
+      },
     ],
     teams: [teamA, teamB],
     teamConstraints: {
-      [teamA.id]: { min: 1, max: 3, useConferenceDay: true },
-      [teamB.id]: { min: 1, max: 3, useConferenceDay: false },
+      [teamA.id]: { min: 1, max: 3, useConferenceDay: true, supervisorMin: 0, supervisorMax: 2 },
+      [teamB.id]: { min: 0, max: 3, useConferenceDay: false, supervisorMin: 0, supervisorMax: 2 },
     },
   };
 };
@@ -48,9 +72,12 @@ export function migrateLoadedState(state) {
   state.workers = (state.workers || []).map((w) => ({
     ...w,
     subGroupId: w.subGroupId ?? null,
+    isSupervisor: Boolean(w.isSupervisor),
+    isGroupSupervisor: Boolean(w.isGroupSupervisor),
   }));
 
   for (const w of state.workers) {
+    if (!w.teamId) w.isGroupSupervisor = false;
     if (w.subGroupId) {
       const sg = state.subGroups.find((g) => g.id === w.subGroupId);
       if (!sg || sg.teamId !== w.teamId) w.subGroupId = null;
@@ -59,9 +86,18 @@ export function migrateLoadedState(state) {
 
   for (const t of state.teams || []) {
     if (!state.teamConstraints[t.id]) {
-      state.teamConstraints[t.id] = { min: 0, max: 99, useConferenceDay: false };
-    } else if (state.teamConstraints[t.id].useConferenceDay == null) {
-      state.teamConstraints[t.id].useConferenceDay = false;
+      state.teamConstraints[t.id] = {
+        min: 0,
+        max: 99,
+        useConferenceDay: false,
+        supervisorMin: 0,
+        supervisorMax: 99,
+      };
+    } else {
+      const tc = state.teamConstraints[t.id];
+      if (tc.useConferenceDay == null) tc.useConferenceDay = false;
+      if (tc.supervisorMin == null) tc.supervisorMin = 0;
+      if (tc.supervisorMax == null) tc.supervisorMax = 99;
     }
   }
 

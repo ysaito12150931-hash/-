@@ -9,11 +9,16 @@ export const CONFERENCE_COLORS = [
   { bg: "#dbeafe", color: "#1e40af", border: "#93c5fd" },
   { bg: "#fce7f3", color: "#9d174d", border: "#f9a8d4" },
   { bg: "#fef3c7", color: "#92400e", border: "#fcd34d" },
-  { bg: "#d1fae5", color: "#065f46", border: "#6ee7b7" },
-  { bg: "#ede9fe", color: "#5b21b6", border: "#c4b5fd" },
   { bg: "#ffedd5", color: "#9a3412", border: "#fdba74" },
+  { bg: "#ede9fe", color: "#5b21b6", border: "#c4b5fd" },
   { bg: "#e0e7ff", color: "#3730a3", border: "#a5b4fc" },
-  { bg: "#ccfbf1", color: "#115e59", border: "#5eead4" },
+];
+
+export const SUBGROUP_CONFERENCE_COLORS = [
+  { bg: "#d1fae5", color: "#047857", border: "#34d399" },
+  { bg: "#bbf7d0", color: "#166534", border: "#4ade80" },
+  { bg: "#dcfce7", color: "#15803d", border: "#86efac" },
+  { bg: "#ecfccb", color: "#3f6212", border: "#bef264" },
 ];
 
 /**
@@ -105,7 +110,15 @@ export function generateShift(state) {
         seed,
       });
       if (!grid) continue;
-      const score = scoreSchedule(grid, workers, days, preferences, requireSupervisor, lockedOff);
+      const score = scoreSchedule(
+        grid,
+        workers,
+        days,
+        preferences,
+        requireSupervisor,
+        lockedOff,
+        maxConsecutiveWork
+      );
       if (score > bestScore) {
         bestScore = score;
         best = grid;
@@ -119,8 +132,18 @@ export function generateShift(state) {
     const supervisorCount = workers.filter((w) => w.isSupervisor).length;
     if (supervisorCount > constraints.supervisorMax) {
       hints.unshift(
-        `責任者登録${supervisorCount}名に対し、1日あたりの上限が${constraints.supervisorMax}名です。上限を${supervisorCount}名以上にするか、責任者登録を減らしてください。`
+        `全体責任者の登録${supervisorCount}名に対し、1日あたりの上限が${constraints.supervisorMax}名です。上限を${supervisorCount}名以上にするか、全体責任者登録を減らしてください。`
       );
+    }
+    for (const team of teams) {
+      const tc = teamConstraints[team.id];
+      if (!tc) continue;
+      const groupSupCount = workers.filter((w) => w.isGroupSupervisor && w.teamId === team.id).length;
+      if (groupSupCount > (tc.supervisorMax ?? 99)) {
+        hints.unshift(
+          `${team.name}: グループ責任者の登録${groupSupCount}名に対し、1日あたりの上限が${tc.supervisorMax}名です。`
+        );
+      }
     }
     return {
       ok: false,
@@ -275,14 +298,37 @@ function findAllWorkStreaks(row, days) {
   return streaks;
 }
 
-function scoreWorkStreaks(row, days) {
+function idealWorkStreakMax(maxConsecutive) {
+  return Math.max(1, Math.min(PREFERRED_MAX_CONSECUTIVE, maxConsecutive - 1));
+}
+
+function isAdjacentToLockedOff(d, lockedOff, workerId) {
+  return Boolean(lockedOff[workerId]?.[d - 1] || lockedOff[workerId]?.[d + 1]);
+}
+
+function scoreWorkStreaks(row, days, maxConsecutive) {
+  const idealMax = idealWorkStreakMax(maxConsecutive);
   let score = 0;
   for (const streak of findAllWorkStreaks(row, days)) {
-    if (streak.len <= PREFERRED_MAX_CONSECUTIVE) {
-      score += (PREFERRED_MAX_CONSECUTIVE + 1 - streak.len) * 4;
-    } else {
-      score -= (streak.len - PREFERRED_MAX_CONSECUTIVE) * 15;
+    if (streak.len < maxConsecutive) {
+      score += (maxConsecutive - streak.len) * 10;
     }
+    if (streak.len <= idealMax) {
+      score += (idealMax + 1 - streak.len) * 8;
+    } else if (streak.len >= 4) {
+      score -= (streak.len - 3) * 30;
+    } else {
+      score -= (streak.len - idealMax) * 12;
+    }
+  }
+  return score;
+}
+
+function scoreAutoOffPlacement(row, days, lockedOff, workerId) {
+  let score = 0;
+  for (let d = 1; d <= days; d++) {
+    if (row[d] || lockedOff[workerId]?.[d]) continue;
+    if (isAdjacentToLockedOff(d, lockedOff, workerId)) score -= 20;
   }
   return score;
 }
@@ -301,7 +347,8 @@ function daysAroundMid(start, end) {
   return out;
 }
 
-function offCandidateDays(row, days, w, lockedOff, lockedWork, halfOff) {
+function offCandidateDays(row, days, w, lockedOff, lockedWork, halfOff, maxConsecutive) {
+  const idealMax = idealWorkStreakMax(maxConsecutive);
   const candidates = [];
   for (let d = 1; d <= days; d++) {
     if (!canAssignOffOnDay(w, d, lockedOff, lockedWork, halfOff) || !row[d]) continue;
@@ -316,15 +363,17 @@ function offCandidateDays(row, days, w, lockedOff, lockedWork, halfOff) {
     for (let i = d + 1; i <= days && row[i]; i++) right++;
     const runLen = left + right + 1;
     let score = 0;
-    if (runLen > PREFERRED_MAX_CONSECUTIVE) score = runLen * 5;
-    else score = runLen - (PREFERRED_MAX_CONSECUTIVE + 1);
+    if (runLen > idealMax) score = runLen * 8;
+    else score = runLen - (idealMax + 1);
+    if (isAdjacentToLockedOff(d, lockedOff, w.id)) score -= 60;
     candidates.push({ d, score });
   }
   candidates.sort((a, b) => b.score - a.score);
   return candidates.map((c) => c.d);
 }
 
-function workCandidateDays(row, days, w, lockedOff) {
+function workCandidateDays(row, days, w, lockedOff, maxConsecutive) {
+  const idealMax = idealWorkStreakMax(maxConsecutive);
   const candidates = [];
   for (let d = 1; d <= days; d++) {
     if (lockedOff[w.id]?.[d] || row[d]) continue;
@@ -333,8 +382,9 @@ function workCandidateDays(row, days, w, lockedOff) {
     const streak = findLongestWorkStreak(row, days);
     row[d] = prev;
     let score = 0;
-    if (streak.len > PREFERRED_MAX_CONSECUTIVE) score -= streak.len * 6;
-    else score += PREFERRED_MAX_CONSECUTIVE + 1 - streak.len;
+    if (streak.len > idealMax) score -= streak.len * 8;
+    else score += idealMax + 1 - streak.len;
+    if (streak.len >= 4) score -= 40;
     candidates.push({ d, score });
   }
   candidates.sort((a, b) => b.score - a.score);
@@ -400,7 +450,7 @@ function seedWorkerOffDays(grid, w, days, targetOff, lockedOff, lockedWork, half
   let cur = countEffectiveOffDays(grid, w.id, days, halfOff);
   let needed = targetOff - cur;
   if (needed > 0.001) {
-    const available = offCandidateDays(grid[w.id], days, w, lockedOff, lockedWork, halfOff);
+    const available = offCandidateDays(grid[w.id], days, w, lockedOff, lockedWork, halfOff, maxConsecutive);
     const count = Math.min(Math.ceil(needed - 0.001), available.length);
     if (count > 0) {
       const shuffled = shuffledArray(available, rng);
@@ -431,7 +481,7 @@ function seedWorkerOffDays(grid, w, days, targetOff, lockedOff, lockedWork, half
   guard = 0;
   while (cur > targetOff + 0.001 && guard < days * 2) {
     guard++;
-    const preferred = workCandidateDays(grid[w.id], days, w, lockedOff).filter(
+    const preferred = workCandidateDays(grid[w.id], days, w, lockedOff, maxConsecutive).filter(
       (d) => canAssignOffOnDay(w, d, lockedOff, lockedWork, halfOff) && !grid[w.id][d]
     );
     const candidates = preferred.length
@@ -456,7 +506,7 @@ function seedWorkerOffDays(grid, w, days, targetOff, lockedOff, lockedWork, half
 function spreadAdditionalOffDays(grid, w, days, neededOff, lockedOff, lockedWork, halfOff, maxConsecutive, rng) {
   if (neededOff <= 0.001) return;
   const count = Math.min(Math.ceil(neededOff - 0.001), days);
-  const available = offCandidateDays(grid[w.id], days, w, lockedOff, lockedWork, halfOff);
+  const available = offCandidateDays(grid[w.id], days, w, lockedOff, lockedWork, halfOff, maxConsecutive);
   if (!available.length) return;
 
   const shuffled = shuffledArray(available, rng);
@@ -483,7 +533,7 @@ function spreadAdditionalOffDays(grid, w, days, neededOff, lockedOff, lockedWork
 }
 
 function trySwapForOff(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, workers, requireSupervisor, rng) {
-  const preferred = offCandidateDays(grid[w.id], days, w, lockedOff, lockedWork, halfOff).filter((d) => grid[w.id][d]);
+  const preferred = offCandidateDays(grid[w.id], days, w, lockedOff, lockedWork, halfOff, maxConsecutive).filter((d) => grid[w.id][d]);
   const dayCandidates = preferred.length ? preferred.slice(0, 12) : shuffledRange(1, days, rng).slice(0, 12);
   for (const d of dayCandidates) {
     for (const w2 of shuffledArray(workers.filter((x) => x.id !== w.id), rng).slice(0, 8)) {
@@ -765,8 +815,9 @@ function assignDay(grid, workers, day, groupCtx, lockedOff, lockedWork, halfOff,
 }
 
 function tryAddOff(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, workers, requireSupervisor, rng) {
-  const candidates = offCandidateDays(grid[w.id], days, w, lockedOff, lockedWork, halfOff);
-  const shuffled = candidates.length ? candidates : shuffledRange(1, days, rng);
+  const candidates = offCandidateDays(grid[w.id], days, w, lockedOff, lockedWork, halfOff, maxConsecutive);
+  const nonAdjacent = candidates.filter((d) => !isAdjacentToLockedOff(d, lockedOff, w.id));
+  const shuffled = (nonAdjacent.length ? nonAdjacent : candidates.length ? candidates : shuffledRange(1, days, rng));
   for (const d of shuffled) {
     if (lockedOff[w.id]?.[d]) continue;
     if (lockedWork[w.id]?.[d]) continue;
@@ -791,7 +842,7 @@ function repairDay(grid, workers, day, days, lockedOff, lockedWork, halfOff, max
 
   const working = workers.filter((w) => grid[w.id][day]);
   const supCount = working.filter((w) => w.isSupervisor).length;
-  const { constraints } = groupCtx;
+  const { constraints, teams, teamConstraints } = groupCtx;
 
   if (supCount > constraints.supervisorMax) {
     for (const w of shuffledArray(
@@ -838,14 +889,67 @@ function repairDay(grid, workers, day, days, lockedOff, lockedWork, halfOff, max
     }
   }
 
+  for (const team of teams) {
+    const tc = teamConstraints[team.id];
+    if (!tc) continue;
+    const groupSupMin = tc.supervisorMin ?? 0;
+    const groupSupMax = tc.supervisorMax ?? 99;
+    const groupSupWorking = workers.filter(
+      (w) => w.isGroupSupervisor && w.teamId === team.id && grid[w.id][day]
+    );
+    const groupSupCount = groupSupWorking.length;
+
+    if (groupSupCount > groupSupMax) {
+      for (const w of shuffledArray(
+        groupSupWorking.filter(
+          (w) => !lockedOff[w.id]?.[day] && !lockedWork[w.id]?.[day] && !halfOff[w.id]?.[day]
+        ),
+        rng
+      )) {
+        grid[w.id][day] = false;
+        if (
+          !violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) &&
+          validateDay(grid, workers, day, groupCtx, requireSupervisor).ok
+        ) {
+          return true;
+        }
+        grid[w.id][day] = true;
+      }
+    }
+
+    if (groupSupCount < groupSupMin) {
+      for (const w of shuffledArray(
+        workers.filter(
+          (w) =>
+            w.isGroupSupervisor &&
+            w.teamId === team.id &&
+            !grid[w.id][day] &&
+            !lockedOff[w.id]?.[day] &&
+            !lockedWork[w.id]?.[day] &&
+            !halfOff[w.id]?.[day]
+        ),
+        rng
+      )) {
+        grid[w.id][day] = true;
+        if (
+          !violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) &&
+          validateDay(grid, workers, day, groupCtx, requireSupervisor).ok
+        ) {
+          return true;
+        }
+        grid[w.id][day] = false;
+      }
+    }
+  }
+
   for (let attempt = 0; attempt < workers.length * 4; attempt++) {
-    const working = shuffledArray(
+    const workingNow = shuffledArray(
       workers.filter(
         (w) => grid[w.id][day] && !lockedOff[w.id]?.[day] && !lockedWork[w.id]?.[day] && !halfOff[w.id]?.[day]
       ),
       rng
     );
-    for (const w of working) {
+    for (const w of workingNow) {
       grid[w.id][day] = false;
       if (
         !violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) &&
@@ -878,7 +982,7 @@ function repairDay(grid, workers, day, days, lockedOff, lockedWork, halfOff, max
 function tryAddWork(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, workers, requireSupervisor, rng) {
   void lockedWork;
   void halfOff;
-  const preferred = workCandidateDays(grid[w.id], days, w, lockedOff);
+  const preferred = workCandidateDays(grid[w.id], days, w, lockedOff, maxConsecutive);
   const candidates = preferred.length ? preferred : shuffledRange(1, days, rng);
   for (const d of candidates) {
     if (lockedOff[w.id]?.[d]) continue;
@@ -916,6 +1020,12 @@ function validateDay(grid, workers, day, groupCtx, requireSupervisor) {
     if (!tc) continue;
     const teamCount = working.filter((w) => w.teamId === team.id).length;
     if (teamCount < tc.min || teamCount > tc.max) {
+      return { ok: false };
+    }
+    const groupSupCount = working.filter((w) => w.isGroupSupervisor && w.teamId === team.id).length;
+    const groupSupMin = tc.supervisorMin ?? 0;
+    const groupSupMax = tc.supervisorMax ?? 99;
+    if (groupSupCount < groupSupMin || groupSupCount > groupSupMax) {
       return { ok: false };
     }
   }
@@ -999,7 +1109,7 @@ function gridToAssignments(grid, workers, days, halfOff) {
   return assignments;
 }
 
-function scoreSchedule(grid, workers, days, preferences, requireSupervisor, lockedOff) {
+function scoreSchedule(grid, workers, days, preferences, requireSupervisor, lockedOff, maxConsecutiveWork) {
   let score = 0;
   for (const w of workers) {
     const pref = preferences[w.name] || {};
@@ -1018,7 +1128,8 @@ function scoreSchedule(grid, workers, days, preferences, requireSupervisor, lock
         if (!grid[w.id][d]) score -= 16;
       }
     }
-    score += scoreWorkStreaks(grid[w.id], days);
+    score += scoreWorkStreaks(grid[w.id], days, maxConsecutiveWork);
+    score += scoreAutoOffPlacement(grid[w.id], days, lockedOff, w.id);
     if (violatesConsecutiveAutoOff(grid[w.id], days, lockedOff, w.id)) {
       score -= 100;
     }
@@ -1041,6 +1152,7 @@ function buildStats(assignments, workers, days) {
       day: d,
       total: working.length,
       supervisors: working.filter((w) => w.isSupervisor).length,
+      groupSupervisors: working.filter((w) => w.isGroupSupervisor).length,
     });
   }
   return { daily };
@@ -1207,24 +1319,23 @@ export function isConferenceDayForSubGroup(conferenceDays, subGroupId, day) {
 
 export function buildConferenceColorMap(teams, subGroups, teamConstraints, subGroupConstraints) {
   const map = new Map();
-  let idx = 0;
+  let teamIdx = 0;
+  let sgIdx = 0;
   for (const team of teams) {
     if (teamConstraints[team.id]?.useConferenceDay) {
-      map.set(`team:${team.id}`, idx++ % CONFERENCE_COLORS.length);
+      map.set(`team:${team.id}`, CONFERENCE_COLORS[teamIdx++ % CONFERENCE_COLORS.length]);
     }
   }
   for (const sg of subGroups) {
     if (subGroupConstraints[sg.id]?.useConferenceDay) {
-      map.set(`subGroup:${sg.id}`, idx++ % CONFERENCE_COLORS.length);
+      map.set(`subGroup:${sg.id}`, SUBGROUP_CONFERENCE_COLORS[sgIdx++ % SUBGROUP_CONFERENCE_COLORS.length]);
     }
   }
   return map;
 }
 
 export function getConferenceGroupStyle(colorMap, type, id) {
-  const idx = colorMap.get(`${type}:${id}`);
-  if (idx == null) return null;
-  return CONFERENCE_COLORS[idx];
+  return colorMap.get(`${type}:${id}`) ?? null;
 }
 
 export function getWorkerConferenceGroup(conferenceDays, worker, day) {

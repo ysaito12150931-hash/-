@@ -4,7 +4,16 @@ import {
   detectCalendarDataStartRow,
   detectNameColumn,
   detectOffDaysColumn,
+  isGroupSubHeaderRow,
 } from "./excel-format.js";
+import {
+  normalizeConferenceDays,
+  buildConferenceColorMap,
+  getConferenceGroupStyle,
+  getWorkerConferenceGroup,
+  getConferenceTeamsOnDay,
+  getConferenceSubGroupsOnDay,
+} from "./scheduler.js";
 
 const OFF_MARKERS = new Set([
   "休",
@@ -153,6 +162,7 @@ export function parsePreferenceSheet(workbook, workerNames, year, month) {
     const row = rows[r];
     const name = String(row[nameCol] ?? "").trim();
     if (!name) continue;
+    if (isGroupSubHeaderRow(row, nameCol)) continue;
     if (name === "チーム" || name.includes("未所属") || name.includes("責任者")) continue;
     if (!nameSet.has(name)) {
       warnings.push(`未登録の勤務者: ${name}`);
@@ -216,15 +226,35 @@ export function buildTemplateWorkbook(state) {
 }
 
 export function exportShiftWorkbook(result, state) {
-  const { year, month, assignments, workers } = result;
+  const { year, month, assignments, workers, conferenceDays: rawConf = {} } = result;
   const days = getDaysInMonth(year, month);
   const ws = {};
+  const conferenceDays = normalizeConferenceDays(rawConf);
+  const teams = state.teams ?? [];
+  const subGroups = state.subGroups ?? [];
+  const preferences = normalizePreferences(state.preferences);
+  const confColorMap = buildConferenceColorMap(
+    teams,
+    subGroups,
+    state.teamConstraints ?? {},
+    state.subGroupConstraints ?? {}
+  );
 
   const dataWorkers = workers.map((w) => {
     const byDay = assignments[w.id] || {};
+    const pref = preferences[w.name] || {};
     const cells = [];
     for (let d = 1; d <= days; d++) {
-      cells.push(formatCellExport(byDay[d], state.useShiftTypes));
+      const cell = byDay[d];
+      const isConference =
+        cell?.type !== "off" && Boolean(getWorkerConferenceGroup(conferenceDays, w, d));
+      const preferredOff =
+        cell?.type === "off" && (pref[d] === "off" || pref[d] === true);
+      cells.push({
+        text: formatCellExport(cell, state.useShiftTypes, isConference),
+        conference: isConference,
+        preferredOff,
+      });
     }
     return {
       id: w.id,
@@ -232,23 +262,38 @@ export function exportShiftWorkbook(result, state) {
       teamId: w.teamId,
       subGroupId: w.subGroupId,
       isSupervisor: w.isSupervisor,
+      isGroupSupervisor: w.isGroupSupervisor,
       monthlyOffDays: w.monthlyOffDays,
       cells,
     };
   });
 
-  fillCalendarTemplateSheet(ws, year, month, days, dataWorkers, state.teams ?? [], state.subGroups ?? []);
+  fillCalendarTemplateSheet(ws, year, month, days, dataWorkers, teams, subGroups, {
+    variant: "shift",
+    getConferenceHeaderLabel(day) {
+      const hasTeam = getConferenceTeamsOnDay(conferenceDays, teams, day).length > 0;
+      const hasSubGroup = getConferenceSubGroupsOnDay(conferenceDays, subGroups, day).length > 0;
+      return hasTeam || hasSubGroup;
+    },
+    getConferenceStyle(worker, day) {
+      const cell = assignments[worker.id]?.[day];
+      if (!cell || cell.type === "off") return null;
+      const group = getWorkerConferenceGroup(conferenceDays, worker, day);
+      if (!group) return null;
+      return getConferenceGroupStyle(confColorMap, group.type, group.id);
+    },
+  });
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, `シフト_${year}${month}`);
   return wb;
 }
 
-function formatCellExport(cell, useShiftTypes) {
+function formatCellExport(cell, useShiftTypes, isConference = false) {
   if (!cell || cell.type === "off") return "休";
   if (cell.type === "half-off") return cell.half === "am" ? "午前休" : "午後休";
-  if (useShiftTypes && cell.shiftType) return cell.shiftType;
-  return "１";
+  if (useShiftTypes && cell.shiftType) return isConference ? `${cell.shiftType}会` : cell.shiftType;
+  return isConference ? "１会" : "１";
 }
 
 export function downloadWorkbook(wb, filename) {
