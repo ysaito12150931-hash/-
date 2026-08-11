@@ -10,11 +10,10 @@ export const EXCEL_COLORS = {
   headerBg: "2F5496",
   weekendBg: "FF6B6B",
   weekendBgSoft: "FFE5E5",
-  weekendBgGreen: "16A34A",
-  weekendBgSoftGreen: "DCFCE7",
   preferredOffBg: "86EFAC",
-  preferredOffBgWeekend: "4ADE80",
   preferredOffFont: "14532D",
+  autoOffBg: "FEF3C7",
+  autoOffFont: "92400E",
   workerBg: "FFFFFF",
   workerNameBg: "F2F2F2",
   /** 50% 灰色（#808080 @ 50% on #FFF） */
@@ -89,19 +88,19 @@ export const STYLES = {
   },
   headerDayWeekendShift: {
     font: font(EXCEL_COLORS.white, true),
-    fill: fill(EXCEL_COLORS.weekendBgGreen),
+    fill: fill(EXCEL_COLORS.weekendBg),
     alignment: { horizontal: "center", vertical: "center", wrapText: true },
     border: baseBorder,
   },
   headerDowWeekendShift: {
-    font: font("14532D", true),
-    fill: fill(EXCEL_COLORS.weekendBgSoftGreen),
+    font: font(EXCEL_COLORS.white, true),
+    fill: fill(EXCEL_COLORS.weekendBg),
     alignment: { horizontal: "center", vertical: "center" },
     border: baseBorder,
   },
   workerCellWeekendShift: {
     font: font("111111", false),
-    fill: fill(EXCEL_COLORS.weekendBgSoftGreen),
+    fill: fill(EXCEL_COLORS.weekendBgSoft),
     alignment: { horizontal: "center", vertical: "center" },
     border: baseBorder,
   },
@@ -111,9 +110,9 @@ export const STYLES = {
     alignment: { horizontal: "center", vertical: "center" },
     border: baseBorder,
   },
-  workerCellPreferredOffWeekend: {
-    font: font(EXCEL_COLORS.preferredOffFont, true),
-    fill: fill(EXCEL_COLORS.preferredOffBgWeekend),
+  workerCellAutoOff: {
+    font: font(EXCEL_COLORS.autoOffFont, false),
+    fill: fill(EXCEL_COLORS.autoOffBg),
     alignment: { horizontal: "center", vertical: "center" },
     border: baseBorder,
   },
@@ -250,15 +249,16 @@ function resolveWeekendStyles(variant) {
 }
 
 function normalizeCellValue(cell) {
-  if (cell == null || cell === "") return { text: "", conference: false, preferredOff: false };
+  if (cell == null || cell === "") return { text: "", conference: false, preferredOff: false, off: false };
   if (typeof cell === "object" && "text" in cell) {
     return {
       text: cell.text,
       conference: Boolean(cell.conference),
       preferredOff: Boolean(cell.preferredOff),
+      off: Boolean(cell.off),
     };
   }
-  return { text: cell, conference: false, preferredOff: false };
+  return { text: cell, conference: false, preferredOff: false, off: false };
 }
 
 function writeWorkerRow(ws, r, days, worker, weekends, variant, getConferenceStyle) {
@@ -272,7 +272,9 @@ function writeWorkerRow(ws, r, days, worker, weekends, variant, getConferenceSty
     if (confStyle) {
       style = makeStyle(confStyle.color.replace("#", ""), confStyle.bg.replace("#", ""), true);
     } else if (cell.preferredOff && variant === "shift") {
-      style = weekends.has(d) ? STYLES.workerCellPreferredOffWeekend : STYLES.workerCellPreferredOff;
+      style = STYLES.workerCellPreferredOff;
+    } else if (cell.off && variant === "shift") {
+      style = STYLES.workerCellAutoOff;
     } else if (cell.conference) {
       style = weekends.has(d) && variant === "shift"
         ? STYLES.workerCellConferenceWeekendShift
