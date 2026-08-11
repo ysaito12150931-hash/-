@@ -20,6 +20,7 @@ import {
   generateShift,
   formatCellDisplay,
   countWorkerOffDaysFromAssignments,
+  buildSupervisorAbsence,
   getConferenceTeamsOnDay,
   getConferenceSubGroupsOnDay,
   getWorkerConferenceGroup,
@@ -404,7 +405,7 @@ function bindShift() {
       state.lastResult = { ...result, workers: state.workers.map((w) => ({ ...w })) };
       persist();
       status.textContent = result.messages.join(" ");
-      status.className = result.messages.some((m) => m.includes("超え"))
+      status.className = result.messages.some((m) => m.includes("超え") || m.includes("責任者不在"))
         ? "status-msg warn"
         : "status-msg success";
       renderShiftResult(result);
@@ -1427,6 +1428,17 @@ function renderShiftResult(result) {
     });
   });
 
+  const supervisorAbsence =
+    result.supervisorAbsence ??
+    buildSupervisorAbsence(
+      assignments,
+      workers,
+      days,
+      state.constraints,
+      teams,
+      state.teamConstraints
+    );
+
   html += "</tbody><tfoot><tr class='shift-total-row'>";
   html += "<td class='sticky-col'>出勤合計</td>";
   for (let d = 1; d <= days; d++) {
@@ -1434,6 +1446,21 @@ function renderShiftResult(result) {
       stats.daily[d - 1]?.total ??
       workers.filter((w) => assignments[w.id][d]?.type !== "off").length;
     html += `<td class="shift-total-cell">${total}</td>`;
+  }
+  html += "<td class='shift-off-col'></td></tr>";
+  html += "<tr class='shift-absence-row'>";
+  html += "<td class='sticky-col'>備考</td>";
+  for (let d = 1; d <= days; d++) {
+    const info = supervisorAbsence[d];
+    if (!info) {
+      html += "<td class='shift-absence-cell'></td>";
+      continue;
+    }
+    const details = [];
+    if (info.overall) details.push("全体");
+    if (info.teams?.length) details.push(...info.teams);
+    const title = details.length ? `${info.text}（${details.join("・")}）` : info.text;
+    html += `<td class="shift-absence-cell is-absent" title="${escapeHtml(title)}">${escapeHtml(info.text)}</td>`;
   }
   html += "<td class='shift-off-col'></td></tr></tfoot></table>";
 

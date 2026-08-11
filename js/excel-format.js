@@ -147,6 +147,24 @@ export const STYLES = {
     fill: fill(EXCEL_COLORS.spacerBlack50),
     border: baseBorder,
   },
+  footerLabel: {
+    font: font("7F1D1D", true),
+    fill: fill("FFEDD5"),
+    alignment: { horizontal: "left", vertical: "center" },
+    border: baseBorder,
+  },
+  footerCell: {
+    font: font("111111", false),
+    fill: fill("FFF7ED"),
+    alignment: { horizontal: "center", vertical: "center", wrapText: true },
+    border: baseBorder,
+  },
+  footerCellAbsent: {
+    font: { name: "Yu Gothic UI", sz: 8, bold: true, color: { rgb: "991B1B" } },
+    fill: fill("FECACA"),
+    alignment: { horizontal: "center", vertical: "center", wrapText: true },
+    border: baseBorder,
+  },
 };
 
 /**
@@ -306,12 +324,13 @@ function applyTeamColumnMerge(ws, rStart, rEnd, label) {
  * @param {{ id?: string, name: string, teamId?: string|null, subGroupId?: string|null, isSupervisor?: boolean, cells?: string[] }[]} workers
  * @param {{ id: string, name: string }[]} teams
  * @param {{ id: string, name: string, teamId: string }[]} [subGroups]
- * @param {{ variant?: 'template'|'shift', getConferenceHeaderLabel?: (day:number)=>string, getConferenceStyle?: (worker:object, day:number)=>object|null }} [options]
+ * @param {{ variant?: 'template'|'shift', getConferenceHeaderLabel?: (day:number)=>string, getConferenceStyle?: (worker:object, day:number)=>object|null, getFooterLabel?: (day:number)=>string }} [options]
  */
 export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams = [], subGroups = [], options = {}) {
   const variant = options.variant ?? "template";
   const getConferenceHeaderLabel = options.getConferenceHeaderLabel;
   const getConferenceStyle = options.getConferenceStyle;
+  const getFooterLabel = options.getFooterLabel;
   const weekends = getWeekendDaySet(year, month, days);
   const weekendStyles = resolveWeekendStyles(variant);
   const sections = getWorkerSections(workers, teams, subGroups);
@@ -362,12 +381,28 @@ export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams 
       r++;
     }
   });
+
+  let footerRow = null;
+  if (variant === "shift" && getFooterLabel) {
+    footerRow = r;
+    setStyledCell(ws, r, COL_TEAM, "", STYLES.footerLabel);
+    setStyledCell(ws, r, COL_NAME, "備考", STYLES.footerLabel);
+    for (let d = 1; d <= days; d++) {
+      const label = getFooterLabel(d) || "";
+      setStyledCell(ws, r, dayColumn(d), label, label ? STYLES.footerCellAbsent : STYLES.footerCell);
+    }
+    setStyledCell(ws, r, offDaysColumn(days), "", STYLES.footerCell);
+    r++;
+  }
+
   ws["!ref"] = XLSX.utils.encode_range({
     s: { c: 0, r: 0 },
     e: { c: lastColumnIndex(days), r: Math.max(r - 1, 1) },
   });
   ws["!cols"] = [{ wch: 12 }, { wch: 14 }, ...Array.from({ length: days }, () => ({ wch: 6 })), { wch: 10 }];
-  ws["!rows"] = [{ hpt: 22 }, { hpt: 20 }];
+  const rows = [{ hpt: 22 }, { hpt: 20 }];
+  if (footerRow != null) rows[footerRow] = { hpt: 36 };
+  ws["!rows"] = rows;
   ws["!views"] = [
     {
       state: "frozen",

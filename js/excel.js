@@ -13,6 +13,7 @@ import {
   getWorkerConferenceGroup,
   getConferenceTeamsOnDay,
   getConferenceSubGroupsOnDay,
+  buildSupervisorAbsence,
 } from "./scheduler.js";
 
 const OFF_MARKERS = new Set([
@@ -163,7 +164,7 @@ export function parsePreferenceSheet(workbook, workerNames, year, month) {
     const name = String(row[nameCol] ?? "").trim();
     if (!name) continue;
     if (isGroupSubHeaderRow(row, nameCol)) continue;
-    if (name === "チーム" || name.includes("未所属") || name.includes("責任者")) continue;
+    if (name === "チーム" || name === "備考" || name === "出勤合計" || name.includes("未所属") || name.includes("責任者")) continue;
     if (!nameSet.has(name)) {
       warnings.push(`未登録の勤務者: ${name}`);
       continue;
@@ -233,6 +234,16 @@ export function exportShiftWorkbook(result, state) {
   const teams = state.teams ?? [];
   const subGroups = state.subGroups ?? [];
   const preferences = normalizePreferences(state.preferences);
+  const supervisorAbsence =
+    result.supervisorAbsence ??
+    buildSupervisorAbsence(
+      assignments,
+      workers,
+      days,
+      state.constraints,
+      teams,
+      state.teamConstraints ?? {}
+    );
   const confColorMap = buildConferenceColorMap(
     teams,
     subGroups,
@@ -281,6 +292,9 @@ export function exportShiftWorkbook(result, state) {
       const group = getWorkerConferenceGroup(conferenceDays, worker, day);
       if (!group) return null;
       return getConferenceGroupStyle(confColorMap, group.type, group.id);
+    },
+    getFooterLabel(day) {
+      return supervisorAbsence[day]?.text || "";
     },
   });
 

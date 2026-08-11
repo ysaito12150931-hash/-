@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>シフト作成アプリ</title>
-  <link rel="stylesheet" href="css/app.css?v=1.5.7" />
+  <link rel="stylesheet" href="css/app.css?v=1.5.8" />
   <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 </head>
 <body>
@@ -193,7 +193,7 @@
       <h2>人数制約</h2>
       <fieldset class="card">
         <legend>全体責任者（1日あたり）</legend>
-        <p class="hint">可能な限り全体責任者を最低1人配置します。制約を満たせない場合は0人でも可とします。グループごとの責任者人数は「グループ」タブで設定します。全体責任者とグループ責任者は重複して構いません。</p>
+        <p class="hint">可能な限り全体責任者を下限人数配置します。希望休の重複などで下限を満たせない日はシフトを作成し、その列の一番下に「責任者不在」と表示します。グループごとの責任者人数は「グループ」タブで設定します。全体責任者とグループ責任者は重複して構いません。</p>
         <div class="team-stats-bar supervisor-stats-bar" id="supervisor-stats-constraints" aria-live="polite">
           <span class="stat stat-total">全体責任者登録 <strong id="supervisor-registered-count-constraints">0</strong> 名</span>
           <span class="stat">1日あたり上限 <strong id="supervisor-daily-max-display">2</strong> 名</span>
@@ -265,6 +265,6 @@
     <p>データはこのブラウザのローカルストレージに保存されます。</p>
   </footer>
 
-  <script type="module" src="js/app.js?v=1.5.7"></script>
+  <script type="module" src="js/app.js?v=1.5.8"></script>
 </body>
 </html>

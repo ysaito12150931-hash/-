@@ -117,7 +117,8 @@ export function generateShift(state) {
         preferences,
         requireSupervisor,
         lockedOff,
-        maxConsecutiveWork
+        maxConsecutiveWork,
+        { constraints, teams, teamConstraints }
       );
       if (score > bestScore) {
         bestScore = score;
@@ -158,6 +159,20 @@ export function generateShift(state) {
   applyShiftTypes(best, workers, days, useShiftTypes, shiftTypes);
   const assignments = gridToAssignments(best, workers, days, halfOff);
   const stats = buildStats(assignments, workers, days);
+  const supervisorAbsence = buildSupervisorAbsence(
+    assignments,
+    workers,
+    days,
+    constraints,
+    teams,
+    teamConstraints
+  );
+  const absenceDays = Object.keys(supervisorAbsence).map((d) => Number(d)).sort((a, b) => a - b);
+  if (absenceDays.length) {
+    messages.push(
+      `希望休の重複などにより責任者の下限を満たせない日があります（${absenceDays.join("日、")}日）。該当列の一番下に「責任者不在」と表示しています。`
+    );
+  }
   const conferenceDays = computeConferenceDays(
     assignments,
     workers,
@@ -172,8 +187,9 @@ export function generateShift(state) {
   return {
     ok: true,
     assignments,
-    messages: messages.length ? messages : ["シフトを生成しました。"],
+    messages: messages.length ? ["シフトを生成しました。", ...messages] : ["シフトを生成しました。"],
     stats,
+    supervisorAbsence,
     conferenceDays,
     year,
     month,
@@ -676,7 +692,16 @@ function tryBuildSchedule(ctx) {
     requireSupervisor,
     seed,
   } = ctx;
-  const groupCtx = { constraints, teamConstraints, teams, subGroups, subGroupConstraints };
+  const groupCtx = {
+    constraints,
+    teamConstraints,
+    teams,
+    subGroups,
+    subGroupConstraints,
+    lockedOff,
+    lockedWork,
+    halfOff,
+  };
   const rng = mulberry32(seed);
 
   const grid = {};
@@ -837,12 +862,86 @@ function tryAddOff(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive
   return false;
 }
 
-function repairDay(grid, workers, day, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, requireSupervisor, rng) {
-  if (validateDay(grid, workers, day, groupCtx, requireSupervisor).ok) return true;
+function tryPlaceSupervisor(grid, workers, day, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, requireSupervisor, rng, predicate) {
+  for (const w of shuffledArray(
+    workers.filter(
+      (w) =>
+        predicate(w) &&
+        !grid[w.id][day] &&
+        !lockedOff[w.id]?.[day] &&
+        !lockedWork[w.id]?.[day] &&
+        !halfOff[w.id]?.[day]
+    ),
+    rng
+  )) {
+    grid[w.id][day] = true;
+    if (
+      !violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) &&
+      validateDay(grid, workers, day, groupCtx, requireSupervisor).ok
+    ) {
+      return true;
+    }
+    grid[w.id][day] = false;
+  }
+  return false;
+}
 
+function repairDay(grid, workers, day, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, requireSupervisor, rng) {
+  const hardOk = validateDay(grid, workers, day, groupCtx, requireSupervisor).ok;
   const working = workers.filter((w) => grid[w.id][day]);
   const supCount = working.filter((w) => w.isSupervisor).length;
   const { constraints, teams, teamConstraints } = groupCtx;
+  const belowSupMin = supCount < (constraints.supervisorMin ?? 0);
+  const belowGroupMin = teams.some((team) => {
+    const tc = teamConstraints[team.id];
+    const min = tc?.supervisorMin ?? 0;
+    if (min <= 0) return false;
+    const n = working.filter((w) => w.isGroupSupervisor && w.teamId === team.id).length;
+    return n < min;
+  });
+
+  if (hardOk && (belowSupMin || belowGroupMin)) {
+    if (belowSupMin) {
+      tryPlaceSupervisor(
+        grid,
+        workers,
+        day,
+        days,
+        lockedOff,
+        lockedWork,
+        halfOff,
+        maxConsecutive,
+        groupCtx,
+        requireSupervisor,
+        rng,
+        (w) => w.isSupervisor
+      );
+    }
+    for (const team of teams) {
+      const tc = teamConstraints[team.id];
+      const min = tc?.supervisorMin ?? 0;
+      if (min <= 0) continue;
+      const n = workers.filter((w) => w.isGroupSupervisor && w.teamId === team.id && grid[w.id][day]).length;
+      if (n >= min) continue;
+      tryPlaceSupervisor(
+        grid,
+        workers,
+        day,
+        days,
+        lockedOff,
+        lockedWork,
+        halfOff,
+        maxConsecutive,
+        groupCtx,
+        requireSupervisor,
+        rng,
+        (w) => w.isGroupSupervisor && w.teamId === team.id
+      );
+    }
+    return true;
+  }
+
+  if (hardOk) return true;
 
   if (supCount > constraints.supervisorMax) {
     for (const w of shuffledArray(
@@ -1007,11 +1106,20 @@ function validateDay(grid, workers, day, groupCtx, requireSupervisor) {
   const count = working.length;
 
   const supCount = working.filter((w) => w.isSupervisor).length;
-  if (supCount < constraints.supervisorMin || supCount > constraints.supervisorMax) {
+  if (supCount > constraints.supervisorMax) {
     return { ok: false };
   }
 
-  if (requireSupervisor && supCount < 1 && workers.some((w) => w.isSupervisor) && count > 0) {
+  const { lockedOff = {}, lockedWork = {}, halfOff = {} } = groupCtx;
+  const canPlaceSupervisor = workers.some(
+    (w) =>
+      w.isSupervisor &&
+      !grid[w.id][day] &&
+      !lockedOff[w.id]?.[day] &&
+      !lockedWork[w.id]?.[day] &&
+      !halfOff[w.id]?.[day]
+  );
+  if (requireSupervisor && supCount < 1 && canPlaceSupervisor && count > 0) {
     return { ok: false };
   }
 
@@ -1023,9 +1131,8 @@ function validateDay(grid, workers, day, groupCtx, requireSupervisor) {
       return { ok: false };
     }
     const groupSupCount = working.filter((w) => w.isGroupSupervisor && w.teamId === team.id).length;
-    const groupSupMin = tc.supervisorMin ?? 0;
     const groupSupMax = tc.supervisorMax ?? 99;
-    if (groupSupCount < groupSupMin || groupSupCount > groupSupMax) {
+    if (groupSupCount > groupSupMax) {
       return { ok: false };
     }
   }
@@ -1109,7 +1216,7 @@ function gridToAssignments(grid, workers, days, halfOff) {
   return assignments;
 }
 
-function scoreSchedule(grid, workers, days, preferences, requireSupervisor, lockedOff, maxConsecutiveWork) {
+function scoreSchedule(grid, workers, days, preferences, requireSupervisor, lockedOff, maxConsecutiveWork, groupCtx = {}) {
   let score = 0;
   for (const w of workers) {
     const pref = preferences[w.name] || {};
@@ -1134,11 +1241,51 @@ function scoreSchedule(grid, workers, days, preferences, requireSupervisor, lock
       score -= 100;
     }
   }
+  const { constraints, teams = [], teamConstraints = {} } = groupCtx;
   for (let d = 1; d <= days; d++) {
-    const sup = workers.filter((w) => w.isSupervisor && grid[w.id][d]).length;
+    const working = workers.filter((w) => grid[w.id][d]);
+    const sup = working.filter((w) => w.isSupervisor).length;
     if (requireSupervisor && sup >= 1) score += 2;
+    const supMin = constraints?.supervisorMin ?? 0;
+    if (sup < supMin) score -= 80 * (supMin - sup);
+    for (const team of teams) {
+      const tc = teamConstraints[team.id];
+      if (!tc) continue;
+      const groupMin = tc.supervisorMin ?? 0;
+      if (groupMin <= 0) continue;
+      const groupSup = working.filter((w) => w.isGroupSupervisor && w.teamId === team.id).length;
+      if (groupSup < groupMin) score -= 60 * (groupMin - groupSup);
+    }
   }
   return score;
+}
+
+function isWorkingAssignment(cell) {
+  return Boolean(cell && cell.type !== "off");
+}
+
+/**
+ * 責任者の下限を下回った日。表示テキストは常に「責任者不在」。
+ * @returns {Record<number, { text: string, overall: boolean, teams: string[] }>}
+ */
+export function buildSupervisorAbsence(assignments, workers, days, constraints, teams = [], teamConstraints = {}) {
+  const byDay = {};
+  for (let d = 1; d <= days; d++) {
+    const working = workers.filter((w) => isWorkingAssignment(assignments[w.id]?.[d]));
+    const overall = working.filter((w) => w.isSupervisor).length < (constraints?.supervisorMin ?? 0);
+    const missingTeams = [];
+    for (const team of teams) {
+      const tc = teamConstraints[team.id];
+      const min = tc?.supervisorMin ?? 0;
+      if (min <= 0) continue;
+      const groupSup = working.filter((w) => w.isGroupSupervisor && w.teamId === team.id).length;
+      if (groupSup < min) missingTeams.push(team.name);
+    }
+    if (overall || missingTeams.length) {
+      byDay[d] = { text: "責任者不在", overall, teams: missingTeams };
+    }
+  }
+  return byDay;
 }
 
 function buildStats(assignments, workers, days) {

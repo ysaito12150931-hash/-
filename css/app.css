@@ -549,6 +549,29 @@ select.team-select {
   color: #1e293b;
 }
 
+.shift-absence-row td {
+  background: #fff7ed;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1.2;
+  vertical-align: middle;
+}
+
+.shift-absence-row .sticky-col {
+  background: #ffedd5;
+  text-align: left;
+}
+
+.shift-absence-cell.is-absent {
+  background: #fecaca;
+  color: #991b1b;
+  writing-mode: horizontal-tb;
+  white-space: normal;
+  word-break: break-all;
+  min-width: 3.2rem;
+  padding: 0.15rem 0.1rem;
+}
+
 .shift-off-col {
   background: #f8fafc;
   font-weight: 600;
@@ -838,6 +861,20 @@ select.team-select {
 
   .shift-total-row .sticky-col {
     background: #cbd5e1 !important;
+  }
+
+  .shift-absence-row td {
+    background: #fff7ed !important;
+    font-size: 6pt !important;
+  }
+
+  .shift-absence-row .sticky-col {
+    background: #ffedd5 !important;
+  }
+
+  .shift-absence-cell.is-absent {
+    background: #fecaca !important;
+    color: #991b1b !important;
   }
 
   .cell-conference {
