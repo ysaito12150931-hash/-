@@ -87,6 +87,31 @@ export function getWorkerSections(workers, teams, subGroups = []) {
   return sections;
 }
 
+/** セクションの出勤合計に適用する下限・上限。サブグループがあるメインの残りメンバーにはチーム制約を使わない。 */
+export function getSectionHeadcountBounds(section, teamConstraints = {}, subGroupConstraints = {}, subGroups = []) {
+  if (section.subGroup) {
+    const sgc = subGroupConstraints[section.subGroup.id];
+    if (!sgc) return null;
+    return { min: sgc.min ?? 0, max: sgc.max ?? 99, label: section.label };
+  }
+  if (section.team) {
+    const hasSubs = subGroups.some((sg) => sg.teamId === section.team.id);
+    if (hasSubs) return null;
+    const tc = teamConstraints[section.team.id];
+    if (!tc) return null;
+    return { min: tc.min ?? 0, max: tc.max ?? 99, label: section.label };
+  }
+  return null;
+}
+
+export function isHeadcountOutOfRange(count, bounds) {
+  if (!bounds) return false;
+  const min = bounds.min ?? 0;
+  const max = bounds.max ?? 99;
+  if (min <= 0 && max >= 99) return false;
+  return count < min || count > max;
+}
+
 /** @returns {string|null} */
 export function getWorkerSectionKey(worker, teams, subGroups = []) {
   if (worker.subGroupId && subGroups.some((sg) => sg.id === worker.subGroupId)) {

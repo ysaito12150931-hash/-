@@ -14,7 +14,9 @@ import {
   getConferenceTeamsOnDay,
   getConferenceSubGroupsOnDay,
   buildSupervisorAbsence,
+  buildGroupHeadcountDeviation,
 } from "./scheduler.js";
+import { getSectionHeadcountBounds, isHeadcountOutOfRange } from "./worker-groups.js";
 
 const OFF_MARKERS = new Set([
   "休",
@@ -244,6 +246,17 @@ export function exportShiftWorkbook(result, state) {
       teams,
       state.teamConstraints ?? {}
     );
+  const headcountDeviation =
+    result.headcountDeviation ??
+    buildGroupHeadcountDeviation(
+      assignments,
+      workers,
+      days,
+      teams,
+      state.teamConstraints ?? {},
+      subGroups,
+      state.subGroupConstraints ?? {}
+    );
   const confColorMap = buildConferenceColorMap(
     teams,
     subGroups,
@@ -297,8 +310,20 @@ export function exportShiftWorkbook(result, state) {
       if (!group) return null;
       return getConferenceGroupStyle(confColorMap, group.type, group.id);
     },
+    getGroupTotalOutOfRange(section, day, total) {
+      const bounds = getSectionHeadcountBounds(
+        section,
+        state.teamConstraints ?? {},
+        state.subGroupConstraints ?? {},
+        subGroups
+      );
+      return isHeadcountOutOfRange(total, bounds);
+    },
     getFooterLabel(day) {
-      return supervisorAbsence[day]?.text || "";
+      const labels = [];
+      if (supervisorAbsence[day]?.text) labels.push(supervisorAbsence[day].text);
+      if (headcountDeviation[day]?.text) labels.push(headcountDeviation[day].text);
+      return labels.join(" / ");
     },
   });
 

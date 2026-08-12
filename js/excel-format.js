@@ -164,6 +164,12 @@ export const STYLES = {
     alignment: { horizontal: "center", vertical: "center", wrapText: true },
     border: baseBorder,
   },
+  footerCellDeviation: {
+    font: { name: "Yu Gothic UI", sz: 9, bold: true, color: { rgb: "9A3412" } },
+    fill: fill("FDBA74"),
+    alignment: { horizontal: "center", vertical: "center" },
+    border: baseBorder,
+  },
 };
 
 /**
@@ -328,13 +334,14 @@ function applyTeamColumnMerge(ws, rStart, rEnd, label) {
  * @param {{ id?: string, name: string, teamId?: string|null, subGroupId?: string|null, isSupervisor?: boolean, cells?: string[] }[]} workers
  * @param {{ id: string, name: string }[]} teams
  * @param {{ id: string, name: string, teamId: string }[]} [subGroups]
- * @param {{ variant?: 'template'|'shift', getConferenceHeaderLabel?: (day:number)=>string, getConferenceStyle?: (worker:object, day:number)=>object|null, getFooterLabel?: (day:number)=>string }} [options]
+ * @param {{ variant?: 'template'|'shift', getConferenceHeaderLabel?: (day:number)=>string, getConferenceStyle?: (worker:object, day:number)=>object|null, getFooterLabel?: (day:number)=>string, getGroupTotalOutOfRange?: (section:object, day:number, total:number)=>boolean }} [options]
  */
 export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams = [], subGroups = [], options = {}) {
   const variant = options.variant ?? "template";
   const getConferenceHeaderLabel = options.getConferenceHeaderLabel;
   const getConferenceStyle = options.getConferenceStyle;
   const getFooterLabel = options.getFooterLabel;
+  const getGroupTotalOutOfRange = options.getGroupTotalOutOfRange;
   const weekends = getWeekendDaySet(year, month, days);
   const weekendStyles = resolveWeekendStyles(variant);
   const sections = getWorkerSections(workers, teams, subGroups);
@@ -391,7 +398,8 @@ export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams 
           const cell = normalizeCellValue(w.cells?.[d - 1] ?? "");
           return cell.attending;
         }).length;
-        setStyledCell(ws, r, dayColumn(d), total, STYLES.footerCell);
+        const deviant = Boolean(getGroupTotalOutOfRange?.(section, d, total));
+        setStyledCell(ws, r, dayColumn(d), total, deviant ? STYLES.footerCellDeviation : STYLES.footerCell);
       }
       setStyledCell(ws, r, offDaysColumn(days), "", STYLES.footerCell);
       r++;

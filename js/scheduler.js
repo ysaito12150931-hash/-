@@ -90,6 +90,8 @@ export function generateShift(state) {
 
   let best = null;
   let bestScore = -Infinity;
+  let bestAbsence = Infinity;
+  let bestDeviation = Infinity;
 
   for (const requireSupervisor of [true, false]) {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -110,6 +112,9 @@ export function generateShift(state) {
         seed,
       });
       if (!grid) continue;
+      const groupCtx = { constraints, teamConstraints, teams, subGroups, subGroupConstraints };
+      const absence = countSupervisorAbsenceDays(grid, workers, days, groupCtx);
+      const deviation = countGroupHeadcountDeviationDays(grid, workers, days, groupCtx);
       const score = scoreSchedule(
         grid,
         workers,
@@ -118,9 +123,15 @@ export function generateShift(state) {
         requireSupervisor,
         lockedOff,
         maxConsecutiveWork,
-        { constraints, teams, teamConstraints }
+        groupCtx
       );
-      if (score > bestScore) {
+      if (
+        absence < bestAbsence ||
+        (absence === bestAbsence && deviation < bestDeviation) ||
+        (absence === bestAbsence && deviation === bestDeviation && score > bestScore)
+      ) {
+        bestAbsence = absence;
+        bestDeviation = deviation;
         bestScore = score;
         best = grid;
       }
@@ -157,7 +168,7 @@ export function generateShift(state) {
   }
 
   applyShiftTypes(best, workers, days, useShiftTypes, shiftTypes);
-  const assignments = gridToAssignments(best, workers, days, halfOff);
+  const assignments = gridToAssignments(best, workers, days, halfOff, lockedOff);
   const stats = buildStats(assignments, workers, days);
   const supervisorAbsence = buildSupervisorAbsence(
     assignments,
@@ -170,7 +181,22 @@ export function generateShift(state) {
   const absenceDays = Object.keys(supervisorAbsence).map((d) => Number(d)).sort((a, b) => a - b);
   if (absenceDays.length) {
     messages.push(
-      `希望休の重複などにより責任者の下限を満たせない日があります（${absenceDays.join("日、")}日）。該当列の一番下に「責任者不在」と表示しています。`
+      `希望休の重複などにより責任者の下限を満たせない日が${absenceDays.length}日あります（${absenceDays.join("日、")}日）。候補のうち責任者不在が最も少ないシフトを表示しています。`
+    );
+  }
+  const headcountDeviation = buildGroupHeadcountDeviation(
+    assignments,
+    workers,
+    days,
+    teams,
+    teamConstraints,
+    subGroups,
+    subGroupConstraints
+  );
+  const deviationDays = Object.keys(headcountDeviation).map((d) => Number(d)).sort((a, b) => a - b);
+  if (deviationDays.length) {
+    messages.push(
+      `グループの出勤人数の下限・上限を満たせない日が${deviationDays.length}日あります（${deviationDays.join("日、")}日）。候補のうち人数逸脱が最も少ないシフトを表示しています。`
     );
   }
   const conferenceDays = computeConferenceDays(
@@ -190,6 +216,7 @@ export function generateShift(state) {
     messages: messages.length ? ["シフトを生成しました。", ...messages] : ["シフトを生成しました。"],
     stats,
     supervisorAbsence,
+    headcountDeviation,
     conferenceDays,
     year,
     month,
@@ -554,12 +581,14 @@ function trySwapForOff(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecu
   for (const d of dayCandidates) {
     for (const w2 of shuffledArray(workers.filter((x) => x.id !== w.id), rng).slice(0, 8)) {
       if (grid[w2.id][d] || !canAssignOffOnDay(w2, d, lockedOff, lockedWork, halfOff)) continue;
+      const beforeSnap = groupHeadcountSnapshot(grid, workers, d, groupCtx);
       grid[w.id][d] = false;
       grid[w2.id][d] = true;
       if (
         !violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) &&
         !violatesWorkerStreaks(grid[w2.id], days, lockedOff, w2.id, maxConsecutive) &&
-        validateDay(grid, workers, d, groupCtx, requireSupervisor).ok
+        validateDay(grid, workers, d, groupCtx, requireSupervisor).ok &&
+        !groupHeadcountWorsenedOnDay(grid, workers, d, groupCtx, beforeSnap)
       ) {
         return true;
       }
@@ -576,12 +605,14 @@ function trySwapForWork(grid, w, days, lockedOff, lockedWork, halfOff, maxConsec
     if (grid[w.id][d] || lockedOff[w.id]?.[d] || lockedWork[w.id]?.[d] || halfOff[w.id]?.[d]) continue;
     for (const w2 of shuffledArray(workers.filter((x) => x.id !== w.id), rng).slice(0, 8)) {
       if (!grid[w2.id][d] || !canAssignOffOnDay(w2, d, lockedOff, lockedWork, halfOff)) continue;
+      const beforeSnap = groupHeadcountSnapshot(grid, workers, d, groupCtx);
       grid[w.id][d] = true;
       grid[w2.id][d] = false;
       if (
         !violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) &&
         !violatesWorkerStreaks(grid[w2.id], days, lockedOff, w2.id, maxConsecutive) &&
-        validateDay(grid, workers, d, groupCtx, requireSupervisor).ok
+        validateDay(grid, workers, d, groupCtx, requireSupervisor).ok &&
+        !groupHeadcountWorsenedOnDay(grid, workers, d, groupCtx, beforeSnap)
       ) {
         return true;
       }
@@ -757,6 +788,60 @@ function tryBuildSchedule(ctx) {
     days * workers.length * 16
   );
 
+  fillSupervisorGaps(
+    grid,
+    workers,
+    days,
+    lockedOff,
+    lockedWork,
+    halfOff,
+    maxConsecutiveWork,
+    groupCtx,
+    requireSupervisor,
+    rng
+  );
+
+  balanceOffTargets(
+    grid,
+    workers,
+    days,
+    targets,
+    lockedOff,
+    lockedWork,
+    halfOff,
+    maxConsecutiveWork,
+    groupCtx,
+    requireSupervisor,
+    rng,
+    days * workers.length * 8
+  );
+
+  fillSupervisorGaps(
+    grid,
+    workers,
+    days,
+    lockedOff,
+    lockedWork,
+    halfOff,
+    maxConsecutiveWork,
+    groupCtx,
+    requireSupervisor,
+    rng
+  );
+
+  fillGroupHeadcountGaps(
+    grid,
+    workers,
+    days,
+    lockedOff,
+    lockedWork,
+    halfOff,
+    maxConsecutiveWork,
+    groupCtx,
+    requireSupervisor,
+    rng
+  );
+
   repairAllDays(
     grid,
     workers,
@@ -769,6 +854,19 @@ function tryBuildSchedule(ctx) {
     requireSupervisor,
     rng,
     days * workers.length * 3
+  );
+
+  fillGroupHeadcountGaps(
+    grid,
+    workers,
+    days,
+    lockedOff,
+    lockedWork,
+    halfOff,
+    maxConsecutiveWork,
+    groupCtx,
+    requireSupervisor,
+    rng
   );
 
   for (const w of workers) {
@@ -803,6 +901,7 @@ function assignDay(grid, workers, day, groupCtx, lockedOff, lockedWork, halfOff,
     else grid[w.id][day] = true;
   }
   if (validateDay(grid, workers, day, groupCtx, requireSupervisor).ok) {
+    fitDayGroupHeadcount(grid, workers, day, groupCtx, lockedOff, lockedWork, halfOff, requireSupervisor, rng);
     return true;
   }
 
@@ -816,6 +915,7 @@ function assignDay(grid, workers, day, groupCtx, lockedOff, lockedWork, halfOff,
     for (const w of working) {
       grid[w.id][day] = false;
       if (validateDay(grid, workers, day, groupCtx, requireSupervisor).ok) {
+        fitDayGroupHeadcount(grid, workers, day, groupCtx, lockedOff, lockedWork, halfOff, requireSupervisor, rng);
         return true;
       }
       grid[w.id][day] = true;
@@ -830,16 +930,91 @@ function assignDay(grid, workers, day, groupCtx, lockedOff, lockedWork, halfOff,
     for (const w of offPool) {
       grid[w.id][day] = true;
       if (validateDay(grid, workers, day, groupCtx, requireSupervisor).ok) {
+        fitDayGroupHeadcount(grid, workers, day, groupCtx, lockedOff, lockedWork, halfOff, requireSupervisor, rng);
         return true;
       }
       grid[w.id][day] = false;
     }
   }
 
-  return validateDay(grid, workers, day, groupCtx, requireSupervisor).ok;
+  const ok = validateDay(grid, workers, day, groupCtx, requireSupervisor).ok;
+  if (ok) {
+    fitDayGroupHeadcount(grid, workers, day, groupCtx, lockedOff, lockedWork, halfOff, requireSupervisor, rng);
+  }
+  return ok;
 }
 
 function tryAddOff(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, workers, requireSupervisor, rng) {
+  return (
+    tryAddOffOnDays(
+      grid,
+      w,
+      days,
+      lockedOff,
+      lockedWork,
+      halfOff,
+      maxConsecutive,
+      groupCtx,
+      workers,
+      requireSupervisor,
+      rng,
+      false,
+      true
+    ) ||
+    tryAddOffOnDays(
+      grid,
+      w,
+      days,
+      lockedOff,
+      lockedWork,
+      halfOff,
+      maxConsecutive,
+      groupCtx,
+      workers,
+      requireSupervisor,
+      rng,
+      false,
+      false
+    )
+  );
+}
+
+function tryAddOffKeepingSupervisors(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, workers, requireSupervisor, rng) {
+  return (
+    tryAddOffOnDays(
+      grid,
+      w,
+      days,
+      lockedOff,
+      lockedWork,
+      halfOff,
+      maxConsecutive,
+      groupCtx,
+      workers,
+      requireSupervisor,
+      rng,
+      true,
+      true
+    ) ||
+    tryAddOffOnDays(
+      grid,
+      w,
+      days,
+      lockedOff,
+      lockedWork,
+      halfOff,
+      maxConsecutive,
+      groupCtx,
+      workers,
+      requireSupervisor,
+      rng,
+      true,
+      false
+    )
+  );
+}
+
+function tryAddOffOnDays(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, workers, requireSupervisor, rng, keepSupervisors, keepGroupBounds = false) {
   const candidates = offCandidateDays(grid[w.id], days, w, lockedOff, lockedWork, halfOff, maxConsecutive);
   const nonAdjacent = candidates.filter((d) => !isAdjacentToLockedOff(d, lockedOff, w.id));
   const shuffled = (nonAdjacent.length ? nonAdjacent : candidates.length ? candidates : shuffledRange(1, days, rng));
@@ -848,6 +1023,7 @@ function tryAddOff(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive
     if (lockedWork[w.id]?.[d]) continue;
     if (halfOff[w.id]?.[d]) continue;
     if (!grid[w.id][d]) continue;
+    const beforeSnap = keepGroupBounds ? groupHeadcountSnapshot(grid, workers, d, groupCtx) : null;
     grid[w.id][d] = false;
     if (violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive)) {
       grid[w.id][d] = true;
@@ -857,9 +1033,442 @@ function tryAddOff(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive
       grid[w.id][d] = true;
       continue;
     }
+    if (keepSupervisors && isSupervisorShortOnDay(grid, workers, d, groupCtx)) {
+      grid[w.id][d] = true;
+      continue;
+    }
+    if (keepGroupBounds && groupHeadcountWorsenedOnDay(grid, workers, d, groupCtx, beforeSnap)) {
+      grid[w.id][d] = true;
+      continue;
+    }
     return true;
   }
   return false;
+}
+
+function isSupervisorShortOnDay(grid, workers, day, groupCtx) {
+  const { constraints, teams = [], teamConstraints = {} } = groupCtx;
+  const working = workers.filter((w) => grid[w.id][day]);
+  if (working.filter((w) => w.isSupervisor).length < (constraints?.supervisorMin ?? 0)) {
+    return true;
+  }
+  for (const team of teams) {
+    const min = teamConstraints[team.id]?.supervisorMin ?? 0;
+    if (min <= 0) continue;
+    const n = working.filter((w) => w.isGroupSupervisor && w.teamId === team.id).length;
+    if (n < min) return true;
+  }
+  return false;
+}
+
+function countSupervisorAbsenceDays(grid, workers, days, groupCtx) {
+  let n = 0;
+  for (let d = 1; d <= days; d++) {
+    if (isSupervisorShortOnDay(grid, workers, d, groupCtx)) n++;
+  }
+  return n;
+}
+
+function fillSupervisorGaps(grid, workers, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, requireSupervisor, rng) {
+  const { constraints, teams = [], teamConstraints = {} } = groupCtx;
+  for (let pass = 0; pass < days * 3; pass++) {
+    let changed = false;
+    for (let d = 1; d <= days; d++) {
+      if (!isSupervisorShortOnDay(grid, workers, d, groupCtx)) continue;
+      const working = workers.filter((w) => grid[w.id][d]);
+      if (working.filter((w) => w.isSupervisor).length < (constraints?.supervisorMin ?? 0)) {
+        const placed = tryPlaceSupervisor(
+          grid,
+          workers,
+          d,
+          days,
+          lockedOff,
+          lockedWork,
+          halfOff,
+          maxConsecutive,
+          groupCtx,
+          requireSupervisor,
+          rng,
+          (w) => w.isSupervisor
+        );
+        if (placed) {
+          const restored = tryAddOffKeepingSupervisors(
+            grid,
+            placed,
+            days,
+            lockedOff,
+            lockedWork,
+            halfOff,
+            maxConsecutive,
+            groupCtx,
+            workers,
+            requireSupervisor,
+            rng
+          );
+          if (restored) changed = true;
+          else grid[placed.id][d] = false;
+        }
+      }
+      for (const team of teams) {
+        const min = teamConstraints[team.id]?.supervisorMin ?? 0;
+        if (min <= 0) continue;
+        const n = workers.filter((w) => w.isGroupSupervisor && w.teamId === team.id && grid[w.id][d]).length;
+        if (n >= min) continue;
+        const placed = tryPlaceSupervisor(
+          grid,
+          workers,
+          d,
+          days,
+          lockedOff,
+          lockedWork,
+          halfOff,
+          maxConsecutive,
+          groupCtx,
+          requireSupervisor,
+          rng,
+          (w) => w.isGroupSupervisor && w.teamId === team.id
+        );
+        if (placed) {
+          const restored = tryAddOffKeepingSupervisors(
+            grid,
+            placed,
+            days,
+            lockedOff,
+            lockedWork,
+            halfOff,
+            maxConsecutive,
+            groupCtx,
+            workers,
+            requireSupervisor,
+            rng
+          );
+          if (restored) changed = true;
+          else grid[placed.id][d] = false;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+}
+
+function listActiveGroupBounds(groupCtx) {
+  const { teams = [], teamConstraints = {}, subGroups = [], subGroupConstraints = {} } = groupCtx;
+  const bounds = [];
+  for (const team of teams) {
+    const tc = teamConstraints[team.id];
+    if (!tc) continue;
+    const min = Number(tc.min) || 0;
+    const max = tc.max == null ? 99 : Number(tc.max);
+    if (min <= 0 && max >= 99) continue;
+    bounds.push({
+      key: `team:${team.id}`,
+      name: team.name,
+      min,
+      max,
+      match: (w) => w.teamId === team.id,
+    });
+  }
+  for (const sg of subGroups) {
+    const sgc = subGroupConstraints[sg.id];
+    if (!sgc) continue;
+    const min = Number(sgc.min) || 0;
+    const max = sgc.max == null ? 99 : Number(sgc.max);
+    if (min <= 0 && max >= 99) continue;
+    bounds.push({
+      key: `sg:${sg.id}`,
+      name: sg.name,
+      min,
+      max,
+      match: (w) => w.subGroupId === sg.id,
+    });
+  }
+  return bounds;
+}
+
+function groupHeadcountSnapshotFromWorking(working, groupCtx) {
+  const issues = [];
+  let magnitude = 0;
+  for (const b of listActiveGroupBounds(groupCtx)) {
+    const count = working.filter(b.match).length;
+    if (count < b.min) {
+      const gap = b.min - count;
+      magnitude += gap;
+      issues.push({ ...b, count, kind: "under", gap });
+    } else if (count > b.max) {
+      const gap = count - b.max;
+      magnitude += gap;
+      issues.push({ ...b, count, kind: "over", gap });
+    }
+  }
+  return { issues, magnitude, deviant: issues.length > 0 };
+}
+
+function groupHeadcountSnapshot(grid, workers, day, groupCtx) {
+  const working = workers.filter((w) => grid[w.id][day]);
+  return groupHeadcountSnapshotFromWorking(working, groupCtx);
+}
+
+function groupHeadcountWorsenedOnDay(grid, workers, day, groupCtx, beforeSnap) {
+  if (!beforeSnap) return false;
+  const after = groupHeadcountSnapshot(grid, workers, day, groupCtx);
+  if (!beforeSnap.deviant && after.deviant) return true;
+  return after.magnitude > beforeSnap.magnitude;
+}
+
+function countGroupHeadcountDeviationDays(grid, workers, days, groupCtx) {
+  let n = 0;
+  for (let d = 1; d <= days; d++) {
+    if (groupHeadcountSnapshot(grid, workers, d, groupCtx).deviant) n++;
+  }
+  return n;
+}
+
+function countGroupHeadcountDeviationMagnitude(grid, workers, days, groupCtx) {
+  let n = 0;
+  for (let d = 1; d <= days; d++) {
+    n += groupHeadcountSnapshot(grid, workers, d, groupCtx).magnitude;
+  }
+  return n;
+}
+
+function isGroupHeadcountImproved(grid, workers, days, groupCtx, beforeDays, beforeMag, beforeAbs) {
+  const afterAbs = countSupervisorAbsenceDays(grid, workers, days, groupCtx);
+  if (afterAbs > beforeAbs) return false;
+  const afterDays = countGroupHeadcountDeviationDays(grid, workers, days, groupCtx);
+  if (afterDays < beforeDays) return true;
+  if (afterDays > beforeDays) return false;
+  return countGroupHeadcountDeviationMagnitude(grid, workers, days, groupCtx) < beforeMag;
+}
+
+function fitDayGroupHeadcount(grid, workers, day, groupCtx, lockedOff, lockedWork, halfOff, requireSupervisor, rng) {
+  for (let attempt = 0; attempt < workers.length * 6; attempt++) {
+    const snap = groupHeadcountSnapshot(grid, workers, day, groupCtx);
+    if (!snap.deviant) return;
+    let moved = false;
+    for (const issue of snap.issues) {
+      if (issue.kind === "over") {
+        const pool = shuffledArray(
+          workers.filter(
+            (w) =>
+              issue.match(w) &&
+              grid[w.id][day] &&
+              !lockedOff[w.id]?.[day] &&
+              !lockedWork[w.id]?.[day] &&
+              !halfOff[w.id]?.[day]
+          ),
+          rng
+        );
+        for (const w of pool) {
+          grid[w.id][day] = false;
+          if (
+            validateDay(grid, workers, day, groupCtx, requireSupervisor).ok &&
+            groupHeadcountSnapshot(grid, workers, day, groupCtx).magnitude < snap.magnitude
+          ) {
+            moved = true;
+            break;
+          }
+          grid[w.id][day] = true;
+        }
+      } else {
+        const pool = shuffledArray(
+          workers.filter((w) => issue.match(w) && !grid[w.id][day] && !lockedOff[w.id]?.[day]),
+          rng
+        );
+        for (const w of pool) {
+          grid[w.id][day] = true;
+          if (
+            validateDay(grid, workers, day, groupCtx, requireSupervisor).ok &&
+            groupHeadcountSnapshot(grid, workers, day, groupCtx).magnitude < snap.magnitude
+          ) {
+            moved = true;
+            break;
+          }
+          grid[w.id][day] = false;
+        }
+      }
+      if (moved) break;
+    }
+    if (!moved) return;
+  }
+}
+
+function fillGroupHeadcountGaps(grid, workers, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, requireSupervisor, rng) {
+  const bounds = listActiveGroupBounds(groupCtx);
+  if (!bounds.length) return;
+
+  for (let pass = 0; pass < days * 4; pass++) {
+    let changed = false;
+
+    for (const b of bounds) {
+      const overDays = [];
+      const underDays = [];
+      for (let d = 1; d <= days; d++) {
+        const count = workers.filter((w) => b.match(w) && grid[w.id][d]).length;
+        if (count > b.max) overDays.push(d);
+        if (count < b.min) underDays.push(d);
+      }
+      outer: for (const from of overDays) {
+        for (const to of underDays) {
+          const movers = shuffledArray(
+            workers.filter(
+              (w) =>
+                b.match(w) &&
+                grid[w.id][from] &&
+                !grid[w.id][to] &&
+                !lockedWork[w.id]?.[from] &&
+                !halfOff[w.id]?.[from] &&
+                !lockedOff[w.id]?.[to]
+            ),
+            rng
+          );
+          for (const w of movers) {
+            const backup = { ...grid[w.id] };
+            const beforeDays = countGroupHeadcountDeviationDays(grid, workers, days, groupCtx);
+            const beforeMag = countGroupHeadcountDeviationMagnitude(grid, workers, days, groupCtx);
+            const beforeAbs = countSupervisorAbsenceDays(grid, workers, days, groupCtx);
+            grid[w.id][from] = false;
+            grid[w.id][to] = true;
+            if (
+              !violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) &&
+              validateDay(grid, workers, from, groupCtx, requireSupervisor).ok &&
+              validateDay(grid, workers, to, groupCtx, requireSupervisor).ok &&
+              isGroupHeadcountImproved(grid, workers, days, groupCtx, beforeDays, beforeMag, beforeAbs)
+            ) {
+              changed = true;
+              break outer;
+            }
+            Object.assign(grid[w.id], backup);
+          }
+        }
+      }
+    }
+
+    if (!changed) {
+      for (let d = 1; d <= days; d++) {
+        const snap = groupHeadcountSnapshot(grid, workers, d, groupCtx);
+        for (const issue of snap.issues) {
+          if (issue.kind !== "under") continue;
+          const candidates = shuffledArray(
+            workers.filter((w) => issue.match(w) && !grid[w.id][d] && !lockedOff[w.id]?.[d]),
+            rng
+          );
+          for (const w of candidates) {
+            const backup = { ...grid[w.id] };
+            const beforeDays = countGroupHeadcountDeviationDays(grid, workers, days, groupCtx);
+            const beforeMag = countGroupHeadcountDeviationMagnitude(grid, workers, days, groupCtx);
+            const beforeAbs = countSupervisorAbsenceDays(grid, workers, days, groupCtx);
+            grid[w.id][d] = true;
+            if (
+              violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) ||
+              !validateDay(grid, workers, d, groupCtx, requireSupervisor).ok
+            ) {
+              Object.assign(grid[w.id], backup);
+              continue;
+            }
+            const restored = tryAddOffKeepingSupervisors(
+              grid,
+              w,
+              days,
+              lockedOff,
+              lockedWork,
+              halfOff,
+              maxConsecutive,
+              groupCtx,
+              workers,
+              requireSupervisor,
+              rng
+            );
+            if (
+              restored &&
+              isGroupHeadcountImproved(grid, workers, days, groupCtx, beforeDays, beforeMag, beforeAbs)
+            ) {
+              changed = true;
+              break;
+            }
+            Object.assign(grid[w.id], backup);
+          }
+          if (changed) break;
+        }
+        if (changed) break;
+      }
+    }
+
+    if (!changed) {
+      for (let d = 1; d <= days; d++) {
+        const snap = groupHeadcountSnapshot(grid, workers, d, groupCtx);
+        for (const issue of snap.issues) {
+          if (issue.kind !== "over") continue;
+          const candidates = shuffledArray(
+            workers.filter(
+              (w) =>
+                issue.match(w) &&
+                grid[w.id][d] &&
+                !lockedOff[w.id]?.[d] &&
+                !lockedWork[w.id]?.[d] &&
+                !halfOff[w.id]?.[d]
+            ),
+            rng
+          );
+          for (const w of candidates) {
+            const backup = { ...grid[w.id] };
+            const beforeDays = countGroupHeadcountDeviationDays(grid, workers, days, groupCtx);
+            const beforeMag = countGroupHeadcountDeviationMagnitude(grid, workers, days, groupCtx);
+            const beforeAbs = countSupervisorAbsenceDays(grid, workers, days, groupCtx);
+            grid[w.id][d] = false;
+            if (
+              violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) ||
+              !validateDay(grid, workers, d, groupCtx, requireSupervisor).ok ||
+              isSupervisorShortOnDay(grid, workers, d, groupCtx)
+            ) {
+              Object.assign(grid[w.id], backup);
+              continue;
+            }
+            const restored =
+              tryAddWorkOnDays(
+                grid,
+                w,
+                days,
+                lockedOff,
+                lockedWork,
+                halfOff,
+                maxConsecutive,
+                groupCtx,
+                workers,
+                requireSupervisor,
+                rng,
+                true
+              ) ||
+              tryAddWorkOnDays(
+                grid,
+                w,
+                days,
+                lockedOff,
+                lockedWork,
+                halfOff,
+                maxConsecutive,
+                groupCtx,
+                workers,
+                requireSupervisor,
+                rng,
+                false
+              );
+            if (
+              restored &&
+              isGroupHeadcountImproved(grid, workers, days, groupCtx, beforeDays, beforeMag, beforeAbs)
+            ) {
+              changed = true;
+              break;
+            }
+            Object.assign(grid[w.id], backup);
+          }
+          if (changed) break;
+        }
+        if (changed) break;
+      }
+    }
+
+    if (!changed) break;
+  }
 }
 
 function tryPlaceSupervisor(grid, workers, day, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, requireSupervisor, rng, predicate) {
@@ -879,11 +1488,11 @@ function tryPlaceSupervisor(grid, workers, day, days, lockedOff, lockedWork, hal
       !violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive) &&
       validateDay(grid, workers, day, groupCtx, requireSupervisor).ok
     ) {
-      return true;
+      return w;
     }
     grid[w.id][day] = false;
   }
-  return false;
+  return null;
 }
 
 function repairDay(grid, workers, day, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, requireSupervisor, rng) {
@@ -1079,6 +1688,39 @@ function repairDay(grid, workers, day, days, lockedOff, lockedWork, halfOff, max
 }
 
 function tryAddWork(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, workers, requireSupervisor, rng) {
+  return (
+    tryAddWorkOnDays(
+      grid,
+      w,
+      days,
+      lockedOff,
+      lockedWork,
+      halfOff,
+      maxConsecutive,
+      groupCtx,
+      workers,
+      requireSupervisor,
+      rng,
+      true
+    ) ||
+    tryAddWorkOnDays(
+      grid,
+      w,
+      days,
+      lockedOff,
+      lockedWork,
+      halfOff,
+      maxConsecutive,
+      groupCtx,
+      workers,
+      requireSupervisor,
+      rng,
+      false
+    )
+  );
+}
+
+function tryAddWorkOnDays(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutive, groupCtx, workers, requireSupervisor, rng, keepGroupBounds) {
   void lockedWork;
   void halfOff;
   const preferred = workCandidateDays(grid[w.id], days, w, lockedOff, maxConsecutive);
@@ -1086,6 +1728,7 @@ function tryAddWork(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutiv
   for (const d of candidates) {
     if (lockedOff[w.id]?.[d]) continue;
     if (grid[w.id][d]) continue;
+    const beforeSnap = keepGroupBounds ? groupHeadcountSnapshot(grid, workers, d, groupCtx) : null;
     grid[w.id][d] = true;
     if (violatesWorkerStreaks(grid[w.id], days, lockedOff, w.id, maxConsecutive)) {
       grid[w.id][d] = false;
@@ -1095,13 +1738,17 @@ function tryAddWork(grid, w, days, lockedOff, lockedWork, halfOff, maxConsecutiv
       grid[w.id][d] = false;
       continue;
     }
+    if (keepGroupBounds && groupHeadcountWorsenedOnDay(grid, workers, d, groupCtx, beforeSnap)) {
+      grid[w.id][d] = false;
+      continue;
+    }
     return true;
   }
   return false;
 }
 
 function validateDay(grid, workers, day, groupCtx, requireSupervisor) {
-  const { constraints, teamConstraints, teams, subGroups = [], subGroupConstraints = {} } = groupCtx;
+  const { constraints, teamConstraints, teams } = groupCtx;
   const working = workers.filter((w) => grid[w.id][day]);
   const count = working.length;
 
@@ -1126,22 +1773,9 @@ function validateDay(grid, workers, day, groupCtx, requireSupervisor) {
   for (const team of teams) {
     const tc = teamConstraints[team.id];
     if (!tc) continue;
-    const teamCount = working.filter((w) => w.teamId === team.id).length;
-    if (teamCount < tc.min || teamCount > tc.max) {
-      return { ok: false };
-    }
     const groupSupCount = working.filter((w) => w.isGroupSupervisor && w.teamId === team.id).length;
     const groupSupMax = tc.supervisorMax ?? 99;
     if (groupSupCount > groupSupMax) {
-      return { ok: false };
-    }
-  }
-
-  for (const sg of subGroups) {
-    const sgc = subGroupConstraints[sg.id];
-    if (!sgc) continue;
-    const sgCount = working.filter((w) => w.subGroupId === sg.id).length;
-    if (sgCount < sgc.min || sgCount > sgc.max) {
       return { ok: false };
     }
   }
@@ -1196,13 +1830,13 @@ function applyShiftTypes(grid, workers, days, useShiftTypes, shiftTypes) {
   }
 }
 
-function gridToAssignments(grid, workers, days, halfOff) {
+function gridToAssignments(grid, workers, days, halfOff, lockedOff = {}) {
   const assignments = {};
   for (const w of workers) {
     assignments[w.id] = {};
     for (let d = 1; d <= days; d++) {
       if (!grid[w.id][d]) {
-        assignments[w.id][d] = { type: "off" };
+        assignments[w.id][d] = { type: "off", preferredOff: Boolean(lockedOff[w.id]?.[d]) };
       } else if (halfOff[w.id]?.[d]) {
         assignments[w.id][d] = { type: "half-off", half: halfOff[w.id][d] };
       } else {
@@ -1246,6 +1880,9 @@ function scoreSchedule(grid, workers, days, preferences, requireSupervisor, lock
     const working = workers.filter((w) => grid[w.id][d]);
     const sup = working.filter((w) => w.isSupervisor).length;
     if (requireSupervisor && sup >= 1) score += 2;
+    if (isSupervisorShortOnDay(grid, workers, d, groupCtx)) score -= 10000;
+    const headcount = groupHeadcountSnapshot(grid, workers, d, groupCtx);
+    if (headcount.deviant) score -= 5000 + 40 * headcount.magnitude;
     const supMin = constraints?.supervisorMin ?? 0;
     if (sup < supMin) score -= 80 * (supMin - sup);
     for (const team of teams) {
@@ -1284,6 +1921,36 @@ export function buildSupervisorAbsence(assignments, workers, days, constraints, 
     if (overall || missingTeams.length) {
       byDay[d] = { text: "責任者不在", overall, teams: missingTeams };
     }
+  }
+  return byDay;
+}
+
+/**
+ * グループ出勤人数の下限・上限から逸脱した日。
+ * @returns {Record<number, { text: string, groups: string[] }>}
+ */
+export function buildGroupHeadcountDeviation(
+  assignments,
+  workers,
+  days,
+  teams = [],
+  teamConstraints = {},
+  subGroups = [],
+  subGroupConstraints = {}
+) {
+  const groupCtx = { teams, teamConstraints, subGroups, subGroupConstraints };
+  const byDay = {};
+  for (let d = 1; d <= days; d++) {
+    const working = workers.filter((w) => isWorkingAssignment(assignments[w.id]?.[d]));
+    const snap = groupHeadcountSnapshotFromWorking(working, groupCtx);
+    if (!snap.deviant) continue;
+    byDay[d] = {
+      text: "人数逸脱",
+      groups: snap.issues.map((issue) => {
+        const mark = issue.kind === "under" ? "不足" : "超過";
+        return `${issue.name}${mark}(${issue.count}/${issue.min}〜${issue.max})`;
+      }),
+    };
   }
   return byDay;
 }

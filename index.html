@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>シフト作成アプリ</title>
-  <link rel="stylesheet" href="css/app.css?v=1.5.10" />
+  <link rel="stylesheet" href="css/app.css?v=1.5.13" />
   <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 </head>
 <body>
@@ -109,7 +109,7 @@
     <!-- グループ -->
     <section id="panel-teams" class="panel">
       <h2>グループ設定</h2>
-      <p class="hint">メイングループとその中のサブグループを設定します。1日あたりの出勤人数の下限・上限は、メイングループ・サブグループそれぞれで設定できます。グループ責任者の1日あたり下限・上限もメイングループごとに設定できます。カンファレンス日はメイングループ・サブグループそれぞれで設定できます。<strong>並び順</strong>は↑↓ボタンで変更でき、勤務者一覧・Excel・シフト表の表示順に反映されます。</p>
+      <p class="hint">メイングループとその中のサブグループを設定します。1日あたりの出勤人数の下限・上限は、メイングループ・サブグループそれぞれで設定できます。どうしてもその範囲で作成できない日は逸脱を許容し、逸脱日が最も少ないシフトを表示します。グループ責任者の1日あたり下限・上限もメイングループごとに設定できます。カンファレンス日はメイングループ・サブグループそれぞれで設定できます。<strong>並び順</strong>は↑↓ボタンで変更でき、勤務者一覧・Excel・シフト表の表示順に反映されます。</p>
       <div class="team-stats-bar" id="team-worker-stats" aria-live="polite">
         <span class="stat stat-total">勤務者総数 <strong id="workers-total-count">0</strong> 名</span>
         <span class="stat">グループ所属 <strong id="workers-assigned-count">0</strong> 名</span>
@@ -265,6 +265,6 @@
     <p>データはこのブラウザのローカルストレージに保存されます。</p>
   </footer>
 
-  <script type="module" src="js/app.js?v=1.5.10"></script>
+  <script type="module" src="js/app.js?v=1.5.13"></script>
 </body>
 </html>

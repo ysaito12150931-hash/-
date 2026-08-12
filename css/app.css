@@ -481,10 +481,15 @@ select.team-select {
   background: var(--off);
 }
 
-.cell-preferred-off {
+.shift-table-wrap td.cell-off {
+  background: var(--off);
+}
+
+.cell-preferred-off,
+.shift-table-wrap td.cell-preferred-off {
   background: #86efac;
   color: #14532d;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .cell-half-am {
@@ -547,6 +552,12 @@ select.team-select {
 
 .shift-total-cell {
   color: #1e293b;
+}
+
+.shift-total-cell.is-deviation,
+.shift-group-total-row td.shift-total-cell.is-deviation {
+  background: #fdba74;
+  color: #9a3412;
 }
 
 .shift-group-total-row td {
@@ -837,11 +848,13 @@ select.team-select {
     font-size: 6pt;
   }
 
-  .cell-off {
+  .cell-off,
+  .shift-table-wrap td.cell-off {
     background: var(--off) !important;
   }
 
-  .cell-preferred-off {
+  .cell-preferred-off,
+  .shift-table-wrap td.cell-preferred-off {
     background: #86efac !important;
     color: #14532d !important;
   }
@@ -886,6 +899,12 @@ select.team-select {
   .shift-absence-cell.is-absent {
     background: #fecaca !important;
     color: #991b1b !important;
+  }
+
+  .shift-total-cell.is-deviation,
+  .shift-group-total-row td.shift-total-cell.is-deviation {
+    background: #fdba74 !important;
+    color: #9a3412 !important;
   }
 
   .cell-conference {

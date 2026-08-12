@@ -6,6 +6,8 @@ import {
   moveSubGroupOrder,
   canMoveSubGroupUp,
   canMoveSubGroupDown,
+  getSectionHeadcountBounds,
+  isHeadcountOutOfRange,
 } from "./worker-groups.js";
 import {
   parsePreferenceSheet,
@@ -21,6 +23,7 @@ import {
   formatCellDisplay,
   countWorkerOffDaysFromAssignments,
   buildSupervisorAbsence,
+  buildGroupHeadcountDeviation,
   getConferenceTeamsOnDay,
   getConferenceSubGroupsOnDay,
   getWorkerConferenceGroup,
@@ -405,7 +408,9 @@ function bindShift() {
       state.lastResult = { ...result, workers: state.workers.map((w) => ({ ...w })) };
       persist();
       status.textContent = result.messages.join(" ");
-      status.className = result.messages.some((m) => m.includes("超え") || m.includes("責任者不在"))
+      status.className = result.messages.some(
+        (m) => m.includes("超え") || m.includes("責任者不在") || m.includes("人数逸脱") || m.includes("下限・上限")
+      )
         ? "status-msg warn"
         : "status-msg success";
       renderShiftResult(result);
@@ -1393,12 +1398,18 @@ function renderShiftResult(result) {
         const cell = assignments[w.id][d];
         let label = formatCellDisplay(cell, useTypes);
         const confGroup = getWorkerConferenceGroup(conferenceDays, w, d);
-        const pref = state.preferences[w.name]?.[d];
-        const isPreferredOff = cell?.type === "off" && (pref === "off" || pref === true);
+        const pref = state.preferences[w.name]?.[d] ?? state.preferences[w.name]?.[String(d)];
+        const isPreferredOff =
+          cell?.type === "off" &&
+          (cell.preferredOff || pref === "off" || pref === true);
         let cls = isPreferredOff ? "cell-preferred-off" : "cell-off";
         let cellStyle = "";
+        if (isPreferredOff) {
+          cellStyle = ' style="background:#86efac;color:#14532d;font-weight:700"';
+        }
         if (cell?.type === "half-off") {
           cls = cell.half === "am" ? "cell-half-am" : "cell-half-pm";
+          cellStyle = "";
         } else if (cell?.type === "work") {
           cls = w.isSupervisor ? "cell-supervisor" : "cell-work";
           if (confGroup) {
@@ -1428,13 +1439,23 @@ function renderShiftResult(result) {
     });
 
     // グループ末尾：各日の出勤合計（半休も「出勤扱い」＝type !== "off"）
+    const sectionBounds = getSectionHeadcountBounds(
+      section,
+      state.teamConstraints,
+      state.subGroupConstraints,
+      subGroups
+    );
     html += `<tr class="shift-group-total-row"><td class="sticky-col">出勤合計</td>`;
     for (let d = 1; d <= days; d++) {
       const total = section.members.filter((w) => {
         const c = assignments[w.id]?.[d];
         return c && c.type !== "off";
       }).length;
-      html += `<td class="shift-total-cell">${total}</td>`;
+      const outOfRange = isHeadcountOutOfRange(total, sectionBounds);
+      const rangeTitle = sectionBounds
+        ? `下限${sectionBounds.min}〜上限${sectionBounds.max}${outOfRange ? "（逸脱）" : ""}`
+        : "出勤合計";
+      html += `<td class="shift-total-cell${outOfRange ? " is-deviation" : ""}" title="${escapeHtml(rangeTitle)}">${total}</td>`;
     }
     html += `<td class="shift-off-col"></td></tr>`;
   });
@@ -1448,6 +1469,17 @@ function renderShiftResult(result) {
       state.constraints,
       teams,
       state.teamConstraints
+    );
+  const headcountDeviation =
+    result.headcountDeviation ??
+    buildGroupHeadcountDeviation(
+      assignments,
+      workers,
+      days,
+      teams,
+      state.teamConstraints,
+      subGroups,
+      state.subGroupConstraints
     );
 
   html += "</tbody><tfoot><tr class='shift-total-row'>";
@@ -1463,15 +1495,20 @@ function renderShiftResult(result) {
   html += "<td class='sticky-col'>備考</td>";
   for (let d = 1; d <= days; d++) {
     const info = supervisorAbsence[d];
-    if (!info) {
+    const deviation = headcountDeviation[d];
+    const labels = [];
+    if (info?.text) labels.push(info.text);
+    if (deviation?.text) labels.push(deviation.text);
+    if (!labels.length) {
       html += "<td class='shift-absence-cell'></td>";
       continue;
     }
     const details = [];
-    if (info.overall) details.push("全体");
-    if (info.teams?.length) details.push(...info.teams);
-    const title = details.length ? `${info.text}（${details.join("・")}）` : info.text;
-    html += `<td class="shift-absence-cell is-absent" title="${escapeHtml(title)}">${escapeHtml(info.text)}</td>`;
+    if (info?.overall) details.push("全体");
+    if (info?.teams?.length) details.push(...info.teams);
+    if (deviation?.groups?.length) details.push(...deviation.groups);
+    const title = details.length ? `${labels.join(" / ")}（${details.join("・")}）` : labels.join(" / ");
+    html += `<td class="shift-absence-cell is-absent" title="${escapeHtml(title)}">${escapeHtml(labels.join(" / "))}</td>`;
   }
   html += "<td class='shift-off-col'></td></tr></tfoot></table>";
 
