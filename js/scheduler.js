@@ -235,7 +235,7 @@ function buildPreferenceLocks(workers, preferences, days) {
     halfOff[w.id] = {};
     const pref = preferences[w.name] || {};
     for (let d = 1; d <= days; d++) {
-      const v = pref[d];
+      const v = pref[d] ?? pref[String(d)];
       if (v === "off" || v === true) lockedOff[w.id][d] = true;
       else if (v === "work") lockedWork[w.id][d] = true;
       else if (v === "am-off") halfOff[w.id][d] = "am";
@@ -248,7 +248,7 @@ function buildPreferenceLocks(workers, preferences, days) {
 function countPreferenceOffDays(pref, days) {
   let n = 0;
   for (let d = 1; d <= days; d++) {
-    const v = pref?.[d];
+    const v = pref?.[d] ?? pref?.[String(d)];
     if (v === "off" || v === true) n += 1;
     else if (v === "am-off" || v === "pm-off") n += 0.5;
   }

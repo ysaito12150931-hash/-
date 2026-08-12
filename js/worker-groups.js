@@ -87,6 +87,32 @@ export function getWorkerSections(workers, teams, subGroups = []) {
   return sections;
 }
 
+/** 連続する同一メイングループのセクションをまとめる */
+export function groupWorkerSectionsByTeam(sections) {
+  const groups = [];
+  for (const section of sections) {
+    const teamId = section.team?.id ?? null;
+    const last = groups[groups.length - 1];
+    if (teamId && last && last.teamId === teamId) {
+      last.sections.push(section);
+    } else {
+      groups.push({
+        teamId,
+        team: section.team,
+        sections: [section],
+      });
+    }
+  }
+  return groups;
+}
+
+export function getTeamHeadcountBounds(team, teamConstraints = {}) {
+  if (!team) return null;
+  const tc = teamConstraints[team.id];
+  if (!tc) return null;
+  return { min: tc.min ?? 0, max: tc.max ?? 99, label: team.name };
+}
+
 /** セクションの出勤合計に適用する下限・上限。サブグループがあるメインの残りメンバーにはチーム制約を使わない。 */
 export function getSectionHeadcountBounds(section, teamConstraints = {}, subGroupConstraints = {}, subGroups = []) {
   if (section.subGroup) {

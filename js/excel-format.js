@@ -1,6 +1,6 @@
 /** @typedef {import('xlsx').WorkSheet} WorkSheet */
 
-import { getWorkerSections } from "./worker-groups.js";
+import { getWorkerSections, groupWorkerSectionsByTeam } from "./worker-groups.js";
 
 const DOW_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
 
@@ -165,8 +165,20 @@ export const STYLES = {
     border: baseBorder,
   },
   footerCellDeviation: {
-    font: { name: "Yu Gothic UI", sz: 9, bold: true, color: { rgb: "9A3412" } },
-    fill: fill("FDBA74"),
+    font: { name: "Yu Gothic UI", sz: 9, bold: true, color: { rgb: "6B21A8" } },
+    fill: fill("EDE9FE"),
+    alignment: { horizontal: "center", vertical: "center" },
+    border: baseBorder,
+  },
+  teamTotalLabel: {
+    font: font("FFFFFF", true),
+    fill: fill("64748B"),
+    alignment: { horizontal: "left", vertical: "center" },
+    border: baseBorder,
+  },
+  teamTotalCell: {
+    font: font("0F172A", true),
+    fill: fill("94A3B8"),
     alignment: { horizontal: "center", vertical: "center" },
     border: baseBorder,
   },
@@ -269,6 +281,10 @@ function normalizeCellValue(cell) {
   return { text: cell, conference: false, preferredOff: false, off: false, attending: false };
 }
 
+function countAttendingFromWorkerCells(members, day) {
+  return members.filter((w) => normalizeCellValue(w.cells?.[day - 1] ?? "").attending).length;
+}
+
 function writeWorkerRow(ws, r, days, worker, weekends, variant, getConferenceStyle) {
   setStyledCell(ws, r, COL_TEAM, "", STYLES.workerName);
   setStyledCell(ws, r, COL_NAME, worker.name, STYLES.workerName);
@@ -334,7 +350,7 @@ function applyTeamColumnMerge(ws, rStart, rEnd, label) {
  * @param {{ id?: string, name: string, teamId?: string|null, subGroupId?: string|null, isSupervisor?: boolean, cells?: string[] }[]} workers
  * @param {{ id: string, name: string }[]} teams
  * @param {{ id: string, name: string, teamId: string }[]} [subGroups]
- * @param {{ variant?: 'template'|'shift', getConferenceHeaderLabel?: (day:number)=>string, getConferenceStyle?: (worker:object, day:number)=>object|null, getFooterLabel?: (day:number)=>string, getGroupTotalOutOfRange?: (section:object, day:number, total:number)=>boolean }} [options]
+ * @param {{ variant?: 'template'|'shift', getConferenceHeaderLabel?: (day:number)=>string, getConferenceStyle?: (worker:object, day:number)=>object|null, getFooterLabel?: (day:number)=>string, getGroupTotalOutOfRange?: (section:object, day:number, total:number)=>boolean, getTeamTotalOutOfRange?: (team:object, day:number, total:number)=>boolean }} [options]
  */
 export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams = [], subGroups = [], options = {}) {
   const variant = options.variant ?? "template";
@@ -342,9 +358,11 @@ export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams 
   const getConferenceStyle = options.getConferenceStyle;
   const getFooterLabel = options.getFooterLabel;
   const getGroupTotalOutOfRange = options.getGroupTotalOutOfRange;
+  const getTeamTotalOutOfRange = options.getTeamTotalOutOfRange;
   const weekends = getWeekendDaySet(year, month, days);
   const weekendStyles = resolveWeekendStyles(variant);
   const sections = getWorkerSections(workers, teams, subGroups);
+  const sectionGroups = groupWorkerSectionsByTeam(sections);
 
   setStyledCell(ws, 0, COL_TEAM, "グループ", STYLES.headerName);
   setStyledCell(ws, 0, COL_NAME, "勤務者", STYLES.headerName);
@@ -369,43 +387,63 @@ export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams 
   let r = 2;
   ws["!merges"] = [];
 
-  sections.forEach((section, sectionIndex) => {
-    const groupStartRow = r;
+  sectionGroups.forEach((group, groupIndex) => {
+    group.sections.forEach((section, sectionIndex) => {
+      const groupStartRow = r;
 
-    writeGroupSubHeaderRow(ws, r, days, weekends, variant);
-    r++;
-
-    section.members.forEach((w, memberIndex) => {
-      writeWorkerRow(ws, r, days, w, weekends, variant, getConferenceStyle);
+      writeGroupSubHeaderRow(ws, r, days, weekends, variant);
       r++;
 
-      if (memberIndex < section.members.length - 1) {
-        fillSpacerRow(ws, r, days, STYLES.spacerWithinTeam);
+      section.members.forEach((w, memberIndex) => {
+        writeWorkerRow(ws, r, days, w, weekends, variant, getConferenceStyle);
+        r++;
+
+        if (memberIndex < section.members.length - 1) {
+          fillSpacerRow(ws, r, days, STYLES.spacerWithinTeam);
+          r++;
+        }
+      });
+
+      const membersEndRow = r - 1;
+      applyTeamColumnMerge(ws, groupStartRow, membersEndRow, getGroupLabel(section));
+
+      const hasSubSections = group.sections.some((s) => s.subGroup);
+      if (variant === "shift" && (!group.team || hasSubSections)) {
+        setStyledCell(ws, r, COL_TEAM, "", STYLES.workerName);
+        setStyledCell(ws, r, COL_NAME, "出勤合計", STYLES.footerLabel);
+        for (let d = 1; d <= days; d++) {
+          const total = countAttendingFromWorkerCells(section.members, d);
+          const deviant = Boolean(getGroupTotalOutOfRange?.(section, d, total));
+          setStyledCell(ws, r, dayColumn(d), total, deviant ? STYLES.footerCellDeviation : STYLES.footerCell);
+        }
+        setStyledCell(ws, r, offDaysColumn(days), "", STYLES.footerCell);
+        r++;
+      }
+
+      const isLastSection = sectionIndex === group.sections.length - 1;
+      if (!isLastSection) {
+        fillSpacerRow(ws, r, days, STYLES.spacerTeamBoundary);
         r++;
       }
     });
 
-    // グループ末尾：出勤合計（type !== "off" を出勤扱い）
-    const membersEndRow = r - 1;
-    applyTeamColumnMerge(ws, groupStartRow, membersEndRow, getGroupLabel(section));
-
-    if (variant === "shift") {
-      // 集計行：チーム列は空（チーム名は上の結合セルで表示）
-      setStyledCell(ws, r, COL_TEAM, "", STYLES.workerName);
-      setStyledCell(ws, r, COL_NAME, "出勤合計", STYLES.footerLabel);
+    if (variant === "shift" && group.team) {
+      const hasSubSections = group.sections.some((s) => s.subGroup);
+      const teamMembers = workers.filter((w) => w.teamId === group.team.id);
+      const labelStyle = hasSubSections ? STYLES.teamTotalLabel : STYLES.footerLabel;
+      const cellStyle = hasSubSections ? STYLES.teamTotalCell : STYLES.footerCell;
+      setStyledCell(ws, r, COL_TEAM, hasSubSections ? group.team.name : "", labelStyle);
+      setStyledCell(ws, r, COL_NAME, hasSubSections ? "出勤合計（メイン）" : "出勤合計", labelStyle);
       for (let d = 1; d <= days; d++) {
-        const total = section.members.filter((w) => {
-          const cell = normalizeCellValue(w.cells?.[d - 1] ?? "");
-          return cell.attending;
-        }).length;
-        const deviant = Boolean(getGroupTotalOutOfRange?.(section, d, total));
-        setStyledCell(ws, r, dayColumn(d), total, deviant ? STYLES.footerCellDeviation : STYLES.footerCell);
+        const total = countAttendingFromWorkerCells(teamMembers, d);
+        const deviant = Boolean(getTeamTotalOutOfRange?.(group.team, d, total));
+        setStyledCell(ws, r, dayColumn(d), total, deviant ? STYLES.footerCellDeviation : cellStyle);
       }
-      setStyledCell(ws, r, offDaysColumn(days), "", STYLES.footerCell);
+      setStyledCell(ws, r, offDaysColumn(days), "", cellStyle);
       r++;
     }
 
-    if (sectionIndex < sections.length - 1) {
+    if (groupIndex < sectionGroups.length - 1) {
       fillSpacerRow(ws, r, days, STYLES.spacerTeamBoundary);
       r++;
     }
@@ -415,7 +453,7 @@ export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams 
   if (variant === "shift" && getFooterLabel) {
     footerRow = r;
     setStyledCell(ws, r, COL_TEAM, "", STYLES.footerLabel);
-    setStyledCell(ws, r, COL_NAME, "備考", STYLES.footerLabel);
+    setStyledCell(ws, r, COL_NAME, "責任者不在", STYLES.footerLabel);
     for (let d = 1; d <= days; d++) {
       const label = getFooterLabel(d) || "";
       setStyledCell(ws, r, dayColumn(d), label, label ? STYLES.footerCellAbsent : STYLES.footerCell);

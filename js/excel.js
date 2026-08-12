@@ -14,9 +14,8 @@ import {
   getConferenceTeamsOnDay,
   getConferenceSubGroupsOnDay,
   buildSupervisorAbsence,
-  buildGroupHeadcountDeviation,
 } from "./scheduler.js";
-import { getSectionHeadcountBounds, isHeadcountOutOfRange } from "./worker-groups.js";
+import { getSectionHeadcountBounds, getTeamHeadcountBounds, isHeadcountOutOfRange } from "./worker-groups.js";
 
 const OFF_MARKERS = new Set([
   "休",
@@ -166,7 +165,7 @@ export function parsePreferenceSheet(workbook, workerNames, year, month) {
     const name = String(row[nameCol] ?? "").trim();
     if (!name) continue;
     if (isGroupSubHeaderRow(row, nameCol)) continue;
-    if (name === "チーム" || name === "備考" || name === "出勤合計" || name.includes("未所属") || name.includes("責任者")) continue;
+    if (name === "チーム" || name === "備考" || name.startsWith("出勤合計") || name.includes("未所属") || name.includes("責任者")) continue;
     if (!nameSet.has(name)) {
       warnings.push(`未登録の勤務者: ${name}`);
       continue;
@@ -246,17 +245,6 @@ export function exportShiftWorkbook(result, state) {
       teams,
       state.teamConstraints ?? {}
     );
-  const headcountDeviation =
-    result.headcountDeviation ??
-    buildGroupHeadcountDeviation(
-      assignments,
-      workers,
-      days,
-      teams,
-      state.teamConstraints ?? {},
-      subGroups,
-      state.subGroupConstraints ?? {}
-    );
   const confColorMap = buildConferenceColorMap(
     teams,
     subGroups,
@@ -273,7 +261,12 @@ export function exportShiftWorkbook(result, state) {
       const isConference =
         cell?.type !== "off" && Boolean(getWorkerConferenceGroup(conferenceDays, w, d));
       const preferredOff =
-        cell?.type === "off" && (pref[d] === "off" || pref[d] === true);
+        cell?.type === "off" &&
+        (cell.preferredOff ||
+          pref[d] === "off" ||
+          pref[d] === true ||
+          pref[String(d)] === "off" ||
+          pref[String(d)] === true);
       const off = !cell || cell.type === "off" || cell.type === "half-off";
       const attending = Boolean(cell && cell.type !== "off");
       cells.push({
@@ -319,11 +312,12 @@ export function exportShiftWorkbook(result, state) {
       );
       return isHeadcountOutOfRange(total, bounds);
     },
+    getTeamTotalOutOfRange(team, day, total) {
+      const bounds = getTeamHeadcountBounds(team, state.teamConstraints ?? {});
+      return isHeadcountOutOfRange(total, bounds);
+    },
     getFooterLabel(day) {
-      const labels = [];
-      if (supervisorAbsence[day]?.text) labels.push(supervisorAbsence[day].text);
-      if (headcountDeviation[day]?.text) labels.push(headcountDeviation[day].text);
-      return labels.join(" / ");
+      return supervisorAbsence[day]?.text || "";
     },
   });
 

@@ -1,12 +1,14 @@
 import { loadState, saveState, getDaysInMonth, APP_VERSION } from "./store.js";
 import {
   getWorkerSections,
+  groupWorkerSectionsByTeam,
   moveWorkerWithinSection,
   moveTeamOrder,
   moveSubGroupOrder,
   canMoveSubGroupUp,
   canMoveSubGroupDown,
   getSectionHeadcountBounds,
+  getTeamHeadcountBounds,
   isHeadcountOutOfRange,
 } from "./worker-groups.js";
 import {
@@ -23,7 +25,6 @@ import {
   formatCellDisplay,
   countWorkerOffDaysFromAssignments,
   buildSupervisorAbsence,
-  buildGroupHeadcountDeviation,
   getConferenceTeamsOnDay,
   getConferenceSubGroupsOnDay,
   getWorkerConferenceGroup,
@@ -1384,80 +1385,87 @@ function renderShiftResult(result) {
   }
   html += "<th class='shift-off-col'>休み<br><small>日数</small></th></tr></thead><tbody>";
 
-  getWorkerSections(workers, teams, subGroups).forEach((section) => {
-    html += `<tr class="group-header-row"><td class="sticky-col" colspan="${days + 2}">${escapeHtml(section.label)}</td></tr>`;
-    section.members.forEach((w) => {
-      const team = teams.find((t) => t.id === w.teamId);
-      const subGroup = subGroups.find((sg) => sg.id === w.subGroupId);
-      const groupLabel = [team?.name, subGroup?.name].filter(Boolean).join(" / ");
-      const actualOff = countWorkerOffDaysFromAssignments(assignments, w.id, days);
-      const targetOff = w.monthlyOffDays ?? 0;
-      const offMatch = Math.abs(actualOff - targetOff) < 0.001;
-      html += `<tr><td class="sticky-col">${escapeHtml(w.name)}${w.isSupervisor ? " ★" : ""}${w.isGroupSupervisor ? " ◆" : ""}${groupLabel ? `<br><small>${escapeHtml(groupLabel)}</small>` : ""}</td>`;
-      for (let d = 1; d <= days; d++) {
-        const cell = assignments[w.id][d];
-        let label = formatCellDisplay(cell, useTypes);
-        const confGroup = getWorkerConferenceGroup(conferenceDays, w, d);
-        const pref = state.preferences[w.name]?.[d] ?? state.preferences[w.name]?.[String(d)];
-        const isPreferredOff =
-          cell?.type === "off" &&
-          (cell.preferredOff || pref === "off" || pref === true);
-        let cls = isPreferredOff ? "cell-preferred-off" : "cell-off";
-        let cellStyle = "";
-        if (isPreferredOff) {
-          cellStyle = ' style="background:#86efac;color:#14532d;font-weight:700"';
-        }
-        if (cell?.type === "half-off") {
-          cls = cell.half === "am" ? "cell-half-am" : "cell-half-pm";
-          cellStyle = "";
-        } else if (cell?.type === "work") {
-          cls = w.isSupervisor ? "cell-supervisor" : "cell-work";
-          if (confGroup) {
-            const style = getConferenceGroupStyle(confColorMap, confGroup.type, confGroup.id);
-            if (style) {
-              cls += " cell-conference";
-              cellStyle = ` style="background:${style.bg};color:${style.color};font-weight:700"`;
+  const sections = getWorkerSections(workers, teams, subGroups);
+  groupWorkerSectionsByTeam(sections).forEach((group) => {
+    group.sections.forEach((section) => {
+      html += `<tr class="group-header-row"><td class="sticky-col" colspan="${days + 2}">${escapeHtml(section.label)}</td></tr>`;
+      section.members.forEach((w) => {
+        const team = teams.find((t) => t.id === w.teamId);
+        const subGroup = subGroups.find((sg) => sg.id === w.subGroupId);
+        const groupLabel = [team?.name, subGroup?.name].filter(Boolean).join(" / ");
+        const actualOff = countWorkerOffDaysFromAssignments(assignments, w.id, days);
+        const targetOff = w.monthlyOffDays ?? 0;
+        const offMatch = Math.abs(actualOff - targetOff) < 0.001;
+        html += `<tr><td class="sticky-col">${escapeHtml(w.name)}${w.isSupervisor ? " ★" : ""}${w.isGroupSupervisor ? " ◆" : ""}${groupLabel ? `<br><small>${escapeHtml(groupLabel)}</small>` : ""}</td>`;
+        for (let d = 1; d <= days; d++) {
+          const cell = assignments[w.id][d];
+          let label = formatCellDisplay(cell, useTypes);
+          const confGroup = getWorkerConferenceGroup(conferenceDays, w, d);
+          const pref = state.preferences[w.name]?.[d] ?? state.preferences[w.name]?.[String(d)];
+          const isPreferredOff =
+            cell?.type === "off" &&
+            (cell.preferredOff || pref === "off" || pref === true);
+          let cls = isPreferredOff ? "cell-preferred-off" : "cell-off";
+          let cellStyle = "";
+          if (isPreferredOff) {
+            cellStyle = ' style="background:#86efac;color:#14532d;font-weight:700"';
+          }
+          if (cell?.type === "half-off") {
+            cls = cell.half === "am" ? "cell-half-am" : "cell-half-pm";
+            cellStyle = "";
+          } else if (cell?.type === "work") {
+            cls = w.isSupervisor ? "cell-supervisor" : "cell-work";
+            if (confGroup) {
+              const style = getConferenceGroupStyle(confColorMap, confGroup.type, confGroup.id);
+              if (style) {
+                cls += " cell-conference";
+                cellStyle = ` style="background:${style.bg};color:${style.color};font-weight:700"`;
+              }
             }
           }
+          const confName =
+            confGroup &&
+            (confGroup.type === "team"
+              ? teams.find((t) => t.id === confGroup.id)?.name
+              : (() => {
+                  const sg = subGroups.find((s) => s.id === confGroup.id);
+                  const t = teams.find((x) => x.id === sg?.teamId);
+                  return sg ? (t ? `${t.name}/${sg.name}` : sg.name) : "";
+                })());
+          const titleParts = [label];
+          if (isPreferredOff) titleParts.push("希望休");
+          if (confName) titleParts.push(`${confName} カンファレンス`);
+          const title = titleParts.join(" · ");
+          html += `<td class="${cls}"${cellStyle} title="${escapeHtml(title)}">${escapeHtml(label)}</td>`;
         }
-        const confName =
-          confGroup &&
-          (confGroup.type === "team"
-            ? teams.find((t) => t.id === confGroup.id)?.name
-            : (() => {
-                const sg = subGroups.find((s) => s.id === confGroup.id);
-                const t = teams.find((x) => x.id === sg?.teamId);
-                return sg ? (t ? `${t.name}/${sg.name}` : sg.name) : "";
-              })());
-        const titleParts = [label];
-        if (isPreferredOff) titleParts.push("希望休");
-        if (confName) titleParts.push(`${confName} カンファレンス`);
-        const title = titleParts.join(" · ");
-        html += `<td class="${cls}"${cellStyle} title="${escapeHtml(title)}">${escapeHtml(label)}</td>`;
+        html += `<td class="shift-off-col${offMatch ? "" : " shift-off-mismatch"}" title="目標 ${targetOff} 日">${formatOffDaysDisplay(actualOff, targetOff)}</td></tr>`;
+      });
+
+      const sectionBounds = getSectionHeadcountBounds(
+        section,
+        state.teamConstraints,
+        state.subGroupConstraints,
+        subGroups
+      );
+      const hasSubSections = group.sections.some((s) => s.subGroup);
+      if (!group.team || hasSubSections) {
+        html += renderHeadcountTotalRow("出勤合計", days, section.members, assignments, sectionBounds, "");
       }
-      html += `<td class="shift-off-col${offMatch ? "" : " shift-off-mismatch"}" title="目標 ${targetOff} 日">${formatOffDaysDisplay(actualOff, targetOff)}</td></tr>`;
     });
 
-    // グループ末尾：各日の出勤合計（半休も「出勤扱い」＝type !== "off"）
-    const sectionBounds = getSectionHeadcountBounds(
-      section,
-      state.teamConstraints,
-      state.subGroupConstraints,
-      subGroups
-    );
-    html += `<tr class="shift-group-total-row"><td class="sticky-col">出勤合計</td>`;
-    for (let d = 1; d <= days; d++) {
-      const total = section.members.filter((w) => {
-        const c = assignments[w.id]?.[d];
-        return c && c.type !== "off";
-      }).length;
-      const outOfRange = isHeadcountOutOfRange(total, sectionBounds);
-      const rangeTitle = sectionBounds
-        ? `下限${sectionBounds.min}〜上限${sectionBounds.max}${outOfRange ? "（逸脱）" : ""}`
-        : "出勤合計";
-      html += `<td class="shift-total-cell${outOfRange ? " is-deviation" : ""}" title="${escapeHtml(rangeTitle)}">${total}</td>`;
+    if (group.team) {
+      const teamMembers = workers.filter((w) => w.teamId === group.team.id);
+      const teamBounds = getTeamHeadcountBounds(group.team, state.teamConstraints);
+      const hasSubSections = group.sections.some((s) => s.subGroup);
+      html += renderHeadcountTotalRow(
+        hasSubSections ? `出勤合計（${group.team.name}）` : "出勤合計",
+        days,
+        teamMembers,
+        assignments,
+        teamBounds,
+        hasSubSections ? " shift-team-total-row" : ""
+      );
     }
-    html += `<td class="shift-off-col"></td></tr>`;
   });
 
   const supervisorAbsence =
@@ -1470,17 +1478,6 @@ function renderShiftResult(result) {
       teams,
       state.teamConstraints
     );
-  const headcountDeviation =
-    result.headcountDeviation ??
-    buildGroupHeadcountDeviation(
-      assignments,
-      workers,
-      days,
-      teams,
-      state.teamConstraints,
-      subGroups,
-      state.subGroupConstraints
-    );
 
   html += "</tbody><tfoot><tr class='shift-total-row'>";
   html += "<td class='sticky-col'>出勤合計</td>";
@@ -1492,23 +1489,18 @@ function renderShiftResult(result) {
   }
   html += "<td class='shift-off-col'></td></tr>";
   html += "<tr class='shift-absence-row'>";
-  html += "<td class='sticky-col'>備考</td>";
+  html += "<td class='sticky-col'>責任者不在</td>";
   for (let d = 1; d <= days; d++) {
     const info = supervisorAbsence[d];
-    const deviation = headcountDeviation[d];
-    const labels = [];
-    if (info?.text) labels.push(info.text);
-    if (deviation?.text) labels.push(deviation.text);
-    if (!labels.length) {
+    if (!info) {
       html += "<td class='shift-absence-cell'></td>";
       continue;
     }
     const details = [];
-    if (info?.overall) details.push("全体");
-    if (info?.teams?.length) details.push(...info.teams);
-    if (deviation?.groups?.length) details.push(...deviation.groups);
-    const title = details.length ? `${labels.join(" / ")}（${details.join("・")}）` : labels.join(" / ");
-    html += `<td class="shift-absence-cell is-absent" title="${escapeHtml(title)}">${escapeHtml(labels.join(" / "))}</td>`;
+    if (info.overall) details.push("全体");
+    if (info.teams?.length) details.push(...info.teams);
+    const title = details.length ? `${info.text}（${details.join("・")}）` : info.text;
+    html += `<td class="shift-absence-cell is-absent" title="${escapeHtml(title)}">${escapeHtml(info.text)}</td>`;
   }
   html += "<td class='shift-off-col'></td></tr></tfoot></table>";
 
@@ -1550,6 +1542,27 @@ function formatOffDaysDisplay(actual, target) {
   const actualText = Number.isInteger(actual) ? String(actual) : actual.toFixed(1);
   const targetText = Number.isInteger(target) ? String(target) : target.toFixed(1);
   return `${actualText}/${targetText}`;
+}
+
+function countAttendingMembers(members, assignments, day) {
+  return members.filter((w) => {
+    const c = assignments[w.id]?.[day];
+    return c && c.type !== "off";
+  }).length;
+}
+
+function renderHeadcountTotalRow(label, days, members, assignments, bounds, extraClass) {
+  let html = `<tr class="shift-group-total-row${extraClass}"><td class="sticky-col">${escapeHtml(label)}</td>`;
+  for (let d = 1; d <= days; d++) {
+    const total = countAttendingMembers(members, assignments, d);
+    const outOfRange = isHeadcountOutOfRange(total, bounds);
+    const rangeTitle = bounds
+      ? `下限${bounds.min}〜上限${bounds.max}${outOfRange ? "（逸脱）" : ""}`
+      : label;
+    html += `<td class="shift-total-cell${outOfRange ? " is-deviation" : ""}" title="${escapeHtml(rangeTitle)}">${total}</td>`;
+  }
+  html += `<td class="shift-off-col"></td></tr>`;
+  return html;
 }
 
 init();
