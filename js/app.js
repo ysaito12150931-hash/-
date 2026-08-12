@@ -19,6 +19,9 @@ import {
   readWorkbookFromFile,
   normalizePreferences,
   formatPreferencePreview,
+  isPreferredOffValue,
+  getPreferenceValue,
+  getWorkerPrefMap,
 } from "./excel.js";
 import {
   generateShift,
@@ -366,8 +369,17 @@ function bindExcel() {
       persist();
       renderWorkers();
       renderPreferencePreview();
+      if (state.lastResult) renderShiftResult(state.lastResult);
+
+      let preferredOffCount = 0;
+      for (const days of Object.values(state.preferences)) {
+        preferredOffCount += Object.values(days).filter((v) => v === "off").length;
+      }
 
       const statusParts = [];
+      if (preferredOffCount > 0) {
+        statusParts.push(`希望休 ${preferredOffCount} 件`);
+      }
       if (offDaysUpdated > 0) {
         statusParts.push(`月間休み日数 ${offDaysUpdated}名分を反映`);
       }
@@ -375,7 +387,7 @@ function bindExcel() {
         status.textContent = `読み込みました（${statusParts.join("、")}${statusParts.length ? " / " : ""}警告: ${warnings.join(" / ")}）`;
         status.className = "status-msg warn";
       } else if (statusParts.length) {
-        status.textContent = `休み希望と${statusParts.join("、")}しました。`;
+        status.textContent = `読み込みました（${statusParts.join("、")}）。シフトを再生成すると希望休が緑の「休」になります。`;
         status.className = "status-msg success";
       } else {
         status.textContent = "休み希望を読み込みました。";
@@ -1401,10 +1413,9 @@ function renderShiftResult(result) {
           const cell = assignments[w.id][d];
           let label = formatCellDisplay(cell, useTypes);
           const confGroup = getWorkerConferenceGroup(conferenceDays, w, d);
-          const pref = state.preferences[w.name]?.[d] ?? state.preferences[w.name]?.[String(d)];
-          const isPreferredOff =
-            cell?.type === "off" &&
-            (cell.preferredOff || pref === "off" || pref === true);
+          const pref = getPreferenceValue(getWorkerPrefMap(state.preferences, w.name), d);
+          const isPreferredOff = cell?.type === "off" && (Boolean(cell.preferredOff) || isPreferredOffValue(pref));
+          if (cell?.type === "off") label = "休";
           let cls = isPreferredOff ? "cell-preferred-off" : "cell-off";
           let cellStyle = "";
           if (cell?.type === "off") {

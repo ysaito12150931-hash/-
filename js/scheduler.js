@@ -1,4 +1,5 @@
 import { getDaysInMonth } from "./store.js";
+import { isPreferredOffValue, getPreferenceValue, getWorkerPrefMap } from "./preference-markers.js";
 
 const MAX_ATTEMPTS = 500;
 const MAX_AUTO_OFF_CONSECUTIVE = 3;
@@ -50,7 +51,7 @@ export function generateShift(state) {
   const { lockedOff, lockedWork, halfOff } = locked;
 
   for (const w of workers) {
-    const pref = preferences[w.name] || {};
+    const pref = getWorkerPrefMap(preferences, w.name) || {};
     const prefOffTotal = countPreferenceOffDays(pref, days);
     const achievable = validateOffTargetAchievable(w, days, lockedOff, halfOff, w.monthlyOffDays ?? 0);
     if (!achievable.ok) {
@@ -233,10 +234,10 @@ function buildPreferenceLocks(workers, preferences, days) {
     lockedOff[w.id] = {};
     lockedWork[w.id] = {};
     halfOff[w.id] = {};
-    const pref = preferences[w.name] || {};
+    const pref = getWorkerPrefMap(preferences, w.name) || {};
     for (let d = 1; d <= days; d++) {
-      const v = pref[d] ?? pref[String(d)];
-      if (v === "off" || v === true) lockedOff[w.id][d] = true;
+      const v = getPreferenceValue(pref, d);
+      if (isPreferredOffValue(v)) lockedOff[w.id][d] = true;
       else if (v === "work") lockedWork[w.id][d] = true;
       else if (v === "am-off") halfOff[w.id][d] = "am";
       else if (v === "pm-off") halfOff[w.id][d] = "pm";
@@ -248,8 +249,8 @@ function buildPreferenceLocks(workers, preferences, days) {
 function countPreferenceOffDays(pref, days) {
   let n = 0;
   for (let d = 1; d <= days; d++) {
-    const v = pref?.[d] ?? pref?.[String(d)];
-    if (v === "off" || v === true) n += 1;
+    const v = getPreferenceValue(pref, d);
+    if (isPreferredOffValue(v)) n += 1;
     else if (v === "am-off" || v === "pm-off") n += 0.5;
   }
   return n;
@@ -1853,10 +1854,10 @@ function gridToAssignments(grid, workers, days, halfOff, lockedOff = {}) {
 function scoreSchedule(grid, workers, days, preferences, requireSupervisor, lockedOff, maxConsecutiveWork, groupCtx = {}) {
   let score = 0;
   for (const w of workers) {
-    const pref = preferences[w.name] || {};
+    const pref = getWorkerPrefMap(preferences, w.name) || {};
     for (let d = 1; d <= days; d++) {
-      const p = pref[d];
-      if (p === "off" || p === true) {
+      const p = getPreferenceValue(pref, d);
+      if (isPreferredOffValue(p)) {
         if (!grid[w.id][d]) score += 10;
         if (grid[w.id][d]) score -= 20;
       }

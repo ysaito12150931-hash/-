@@ -15,114 +15,53 @@ import {
   getConferenceSubGroupsOnDay,
 } from "./scheduler.js";
 import { getSectionHeadcountBounds, getTeamHeadcountBounds, isHeadcountOutOfRange } from "./worker-groups.js";
+import {
+  parsePreferenceCell,
+  isPreferredOffValue,
+  getPreferenceValue,
+  getWorkerPrefMap,
+} from "./preference-markers.js";
 
-const OFF_MARKERS = new Set([
-  "休",
-  "休み",
-  "×",
-  "x",
-  "X",
-  "off",
-  "OFF",
-  "0",
-  "希望休",
-  "公休",
-  "〇",
-  "○",
-  "◯",
-]);
+export {
+  parsePreferenceCell,
+  isPreferredOffValue,
+  getPreferenceValue,
+  getWorkerPrefMap,
+} from "./preference-markers.js";
 
-const WORK_MARKERS = new Set([
-  "出勤",
-  "出",
-  "勤",
-  "勤務",
-  "work",
-  "WORK",
-  "1",
-  "丸",
-  "希望出勤",
-  "◎",
-]);
-
-const AM_OFF_MARKERS = new Set([
-  "午前休",
-  "前休",
-  "午前のみ休み",
-  "午前だけ休み",
-  "AM休",
-  "am休",
-  "am-off",
-  "AM-OFF",
-  "午前休み",
-]);
-
-const PM_OFF_MARKERS = new Set([
-  "午後休",
-  "後休",
-  "午後のみ休み",
-  "午後だけ休み",
-  "PM休",
-  "pm休",
-  "pm-off",
-  "PM-OFF",
-  "午後休み",
-]);
-
-export function isOffMarker(value) {
-  if (value == null || value === "") return false;
-  const s = String(value).trim();
-  return OFF_MARKERS.has(s);
-}
-
-export function isWorkMarker(value) {
-  if (value == null || value === "") return false;
-  const s = String(value).trim();
-  return WORK_MARKERS.has(s);
-}
-
-export function isAmOffMarker(value) {
-  if (value == null || value === "") return false;
-  return AM_OFF_MARKERS.has(String(value).trim());
-}
-
-export function isPmOffMarker(value) {
-  if (value == null || value === "") return false;
-  return PM_OFF_MARKERS.has(String(value).trim());
-}
-
-/** @returns {"off"|"work"|"am-off"|"pm-off"|"conflict"|null} */
-export function parsePreferenceCell(value) {
-  const s = value == null ? "" : String(value).trim();
-  if (!s) return null;
-
-  const am = isAmOffMarker(s);
-  const pm = isPmOffMarker(s);
-  if (am && pm) return "conflict";
-  if (am) return "am-off";
-  if (pm) return "pm-off";
-
-  const off = isOffMarker(value);
-  const work = isWorkMarker(value);
-  if (off && work) return "conflict";
-  if (off) return "off";
-  if (work) return "work";
-  return null;
-}
-
-/** 旧形式（true = 休み）との互換 */
+/** 旧形式（true = 休み）および 〇 / ○ などの丸印との互換 */
 export function normalizePreferences(preferences) {
   const out = {};
   for (const [name, days] of Object.entries(preferences || {})) {
     out[name] = {};
     for (const [day, value] of Object.entries(days || {})) {
-      if (value === true || value === "off") out[name][day] = "off";
-      else if (value === "work") out[name][day] = "work";
-      else if (value === "am-off") out[name][day] = "am-off";
-      else if (value === "pm-off") out[name][day] = "pm-off";
+      const kind = parsePreferenceCell(value);
+      if (value === true || value === "off" || kind === "off") out[name][day] = "off";
+      else if (value === "work" || kind === "work") out[name][day] = "work";
+      else if (value === "am-off" || kind === "am-off") out[name][day] = "am-off";
+      else if (value === "pm-off" || kind === "pm-off") out[name][day] = "pm-off";
     }
   }
   return out;
+}
+
+function resolveWorkerName(excelName, workerNames) {
+  const raw = String(excelName ?? "").trim();
+  if (!raw) return null;
+  if (workerNames.includes(raw)) return raw;
+  const norm = (s) => String(s).trim().replace(/[★◆]/g, "").replace(/\s+/g, "");
+  const n = norm(raw);
+  return workerNames.find((w) => norm(w) === n) || null;
+}
+
+function readSheetCell(sheet, r, c, jsonFallback) {
+  const addr = XLSX.utils.encode_cell({ r, c });
+  const cell = sheet[addr];
+  if (cell) {
+    if (cell.w != null && String(cell.w).trim() !== "") return cell.w;
+    if (cell.v != null && cell.v !== "") return cell.v;
+  }
+  return jsonFallback ?? "";
 }
 
 /**
@@ -131,7 +70,7 @@ export function normalizePreferences(preferences) {
 export function parsePreferenceSheet(workbook, workerNames, year, month) {
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
   if (!rows.length) return { preferences: {}, monthlyOffDaysByName: {}, warnings: ["シートが空です"] };
 
   const header = rows[0];
@@ -158,16 +97,16 @@ export function parsePreferenceSheet(workbook, workerNames, year, month) {
 
   const preferences = {};
   const monthlyOffDaysByName = {};
-  const nameSet = new Set(workerNames);
 
   for (let r = dataStartRow; r < rows.length; r++) {
     const row = rows[r];
-    const name = String(row[nameCol] ?? "").trim();
-    if (!name) continue;
+    const excelName = String(row[nameCol] ?? "").trim();
+    if (!excelName) continue;
     if (isGroupSubHeaderRow(row, nameCol)) continue;
-    if (name === "チーム" || name === "備考" || name.startsWith("出勤合計") || name.includes("未所属") || name.includes("責任者")) continue;
-    if (!nameSet.has(name)) {
-      warnings.push(`未登録の勤務者: ${name}`);
+    if (excelName === "チーム" || excelName === "備考" || excelName.startsWith("出勤合計") || excelName.includes("未所属") || excelName.includes("責任者")) continue;
+    const name = resolveWorkerName(excelName, workerNames);
+    if (!name) {
+      warnings.push(`未登録の勤務者: ${excelName}`);
       continue;
     }
     if (!preferences[name]) preferences[name] = {};
@@ -178,7 +117,7 @@ export function parsePreferenceSheet(workbook, workerNames, year, month) {
     }
 
     for (const { col, day } of dayCols) {
-      const kind = parsePreferenceCell(row[col]);
+      const kind = parsePreferenceCell(readSheetCell(sheet, r, col, row[col]));
       if (kind === "conflict") {
         warnings.push(`${name} ${day}日: 休みと出勤の両方の指定があります（スキップ）`);
         continue;
@@ -244,7 +183,7 @@ export function exportShiftWorkbook(result, state) {
 
   const dataWorkers = workers.map((w) => {
     const byDay = assignments[w.id] || {};
-    const pref = preferences[w.name] || {};
+    const pref = getWorkerPrefMap(preferences, w.name) || {};
     const cells = [];
     for (let d = 1; d <= days; d++) {
       const cell = byDay[d];
@@ -252,11 +191,7 @@ export function exportShiftWorkbook(result, state) {
         cell?.type !== "off" && Boolean(getWorkerConferenceGroup(conferenceDays, w, d));
       const preferredOff =
         cell?.type === "off" &&
-        (cell.preferredOff ||
-          pref[d] === "off" ||
-          pref[d] === true ||
-          pref[String(d)] === "off" ||
-          pref[String(d)] === true);
+        (cell.preferredOff || isPreferredOffValue(getPreferenceValue(pref, d)));
       const off = !cell || cell.type === "off" || cell.type === "half-off";
       const attending = Boolean(cell && cell.type !== "off");
       cells.push({
@@ -336,7 +271,7 @@ export async function readWorkbookFromFile(file) {
 }
 
 export function formatPreferencePreview(kind) {
-  if (kind === "off" || kind === true) return "休";
+  if (isPreferredOffValue(kind) || kind === "off" || kind === true) return "休";
   if (kind === "work") return "出";
   if (kind === "am-off") return "前休";
   if (kind === "pm-off") return "後休";
@@ -347,8 +282,8 @@ export function formatPreferencePreview(kind) {
 export function countPreferenceOffDays(pref, days) {
   let n = 0;
   for (let d = 1; d <= days; d++) {
-    const v = pref?.[d];
-    if (v === "off" || v === true) n += 1;
+    const v = getPreferenceValue(pref, d);
+    if (isPreferredOffValue(v)) n += 1;
     else if (v === "am-off" || v === "pm-off") n += 0.5;
   }
   return n;
