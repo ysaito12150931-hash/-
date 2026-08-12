@@ -262,11 +262,13 @@ export function exportShiftWorkbook(result, state) {
       const preferredOff =
         cell?.type === "off" && (pref[d] === "off" || pref[d] === true);
       const off = !cell || cell.type === "off" || cell.type === "half-off";
+      const attending = Boolean(cell && cell.type !== "off");
       cells.push({
         text: formatCellExport(cell, state.useShiftTypes, isConference),
         conference: isConference,
         preferredOff,
         off,
+        attending,
       });
     }
     return {

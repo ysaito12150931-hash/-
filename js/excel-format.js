@@ -249,16 +249,18 @@ function resolveWeekendStyles(variant) {
 }
 
 function normalizeCellValue(cell) {
-  if (cell == null || cell === "") return { text: "", conference: false, preferredOff: false, off: false };
+  if (cell == null || cell === "")
+    return { text: "", conference: false, preferredOff: false, off: false, attending: false };
   if (typeof cell === "object" && "text" in cell) {
     return {
       text: cell.text,
       conference: Boolean(cell.conference),
       preferredOff: Boolean(cell.preferredOff),
       off: Boolean(cell.off),
+      attending: Boolean(cell.attending),
     };
   }
-  return { text: cell, conference: false, preferredOff: false, off: false };
+  return { text: cell, conference: false, preferredOff: false, off: false, attending: false };
 }
 
 function writeWorkerRow(ws, r, days, worker, weekends, variant, getConferenceStyle) {
@@ -376,7 +378,24 @@ export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams 
       }
     });
 
-    applyTeamColumnMerge(ws, groupStartRow, r - 1, getGroupLabel(section));
+    // グループ末尾：出勤合計（type !== "off" を出勤扱い）
+    const membersEndRow = r - 1;
+    applyTeamColumnMerge(ws, groupStartRow, membersEndRow, getGroupLabel(section));
+
+    if (variant === "shift") {
+      // 集計行：チーム列は空（チーム名は上の結合セルで表示）
+      setStyledCell(ws, r, COL_TEAM, "", STYLES.workerName);
+      setStyledCell(ws, r, COL_NAME, "出勤合計", STYLES.footerLabel);
+      for (let d = 1; d <= days; d++) {
+        const total = section.members.filter((w) => {
+          const cell = normalizeCellValue(w.cells?.[d - 1] ?? "");
+          return cell.attending;
+        }).length;
+        setStyledCell(ws, r, dayColumn(d), total, STYLES.footerCell);
+      }
+      setStyledCell(ws, r, offDaysColumn(days), "", STYLES.footerCell);
+      r++;
+    }
 
     if (sectionIndex < sections.length - 1) {
       fillSpacerRow(ws, r, days, STYLES.spacerTeamBoundary);

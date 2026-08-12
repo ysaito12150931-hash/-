@@ -549,6 +549,17 @@ select.team-select {
   color: #1e293b;
 }
 
+.shift-group-total-row td {
+  background: #e2e8f0;
+  font-weight: 700;
+  border-top: 2px solid #94a3b8;
+}
+
+.shift-group-total-row .sticky-col {
+  background: #cbd5e1 !important;
+  text-align: left;
+}
+
 .shift-absence-row td {
   background: #fff7ed;
   font-size: 0.7rem;

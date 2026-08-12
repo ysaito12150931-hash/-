@@ -1426,6 +1426,17 @@ function renderShiftResult(result) {
       }
       html += `<td class="shift-off-col${offMatch ? "" : " shift-off-mismatch"}" title="目標 ${targetOff} 日">${formatOffDaysDisplay(actualOff, targetOff)}</td></tr>`;
     });
+
+    // グループ末尾：各日の出勤合計（半休も「出勤扱い」＝type !== "off"）
+    html += `<tr class="shift-group-total-row"><td class="sticky-col">出勤合計</td>`;
+    for (let d = 1; d <= days; d++) {
+      const total = section.members.filter((w) => {
+        const c = assignments[w.id]?.[d];
+        return c && c.type !== "off";
+      }).length;
+      html += `<td class="shift-total-cell">${total}</td>`;
+    }
+    html += `<td class="shift-off-col"></td></tr>`;
   });
 
   const supervisorAbsence =
