@@ -13,7 +13,6 @@ import {
   getWorkerConferenceGroup,
   getConferenceTeamsOnDay,
   getConferenceSubGroupsOnDay,
-  buildSupervisorAbsence,
 } from "./scheduler.js";
 import { getSectionHeadcountBounds, getTeamHeadcountBounds, isHeadcountOutOfRange } from "./worker-groups.js";
 
@@ -28,6 +27,9 @@ const OFF_MARKERS = new Set([
   "0",
   "希望休",
   "公休",
+  "〇",
+  "○",
+  "◯",
 ]);
 
 const WORK_MARKERS = new Set([
@@ -38,8 +40,6 @@ const WORK_MARKERS = new Set([
   "work",
   "WORK",
   "1",
-  "○",
-  "◯",
   "丸",
   "希望出勤",
   "◎",
@@ -235,16 +235,6 @@ export function exportShiftWorkbook(result, state) {
   const teams = state.teams ?? [];
   const subGroups = state.subGroups ?? [];
   const preferences = normalizePreferences(state.preferences);
-  const supervisorAbsence =
-    result.supervisorAbsence ??
-    buildSupervisorAbsence(
-      assignments,
-      workers,
-      days,
-      state.constraints,
-      teams,
-      state.teamConstraints ?? {}
-    );
   const confColorMap = buildConferenceColorMap(
     teams,
     subGroups,
@@ -316,8 +306,11 @@ export function exportShiftWorkbook(result, state) {
       const bounds = getTeamHeadcountBounds(team, state.teamConstraints ?? {});
       return isHeadcountOutOfRange(total, bounds);
     },
-    getFooterLabel(day) {
-      return supervisorAbsence[day]?.text || "";
+    getSupervisorCount(day) {
+      return (
+        result.stats?.daily?.[day - 1]?.supervisors ??
+        workers.filter((w) => w.isSupervisor && assignments[w.id]?.[day]?.type !== "off").length
+      );
     },
   });
 

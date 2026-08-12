@@ -1407,8 +1407,10 @@ function renderShiftResult(result) {
             (cell.preferredOff || pref === "off" || pref === true);
           let cls = isPreferredOff ? "cell-preferred-off" : "cell-off";
           let cellStyle = "";
-          if (isPreferredOff) {
-            cellStyle = ' style="background:#86efac;color:#14532d;font-weight:700"';
+          if (cell?.type === "off") {
+            cellStyle = isPreferredOff
+              ? ' style="background:#86efac;color:#14532d;font-weight:700"'
+              : ' style="background:#fef3c7;color:#92400e"';
           }
           if (cell?.type === "half-off") {
             cls = cell.half === "am" ? "cell-half-am" : "cell-half-pm";
@@ -1488,19 +1490,23 @@ function renderShiftResult(result) {
     html += `<td class="shift-total-cell">${total}</td>`;
   }
   html += "<td class='shift-off-col'></td></tr>";
-  html += "<tr class='shift-absence-row'>";
-  html += "<td class='sticky-col'>責任者不在</td>";
+  html += "<tr class='shift-supervisor-count-row'>";
+  html += "<td class='sticky-col'>責任者</td>";
   for (let d = 1; d <= days; d++) {
+    const count =
+      stats.daily[d - 1]?.supervisors ??
+      workers.filter((w) => w.isSupervisor && assignments[w.id]?.[d]?.type !== "off").length;
     const info = supervisorAbsence[d];
-    if (!info) {
-      html += "<td class='shift-absence-cell'></td>";
-      continue;
-    }
+    const zero = count === 0;
     const details = [];
-    if (info.overall) details.push("全体");
-    if (info.teams?.length) details.push(...info.teams);
-    const title = details.length ? `${info.text}（${details.join("・")}）` : info.text;
-    html += `<td class="shift-absence-cell is-absent" title="${escapeHtml(title)}">${escapeHtml(info.text)}</td>`;
+    if (info?.overall) details.push("全体");
+    if (info?.teams?.length) details.push(...info.teams);
+    const title = zero
+      ? details.length
+        ? `責任者0人（${details.join("・")}）`
+        : "責任者0人"
+      : `責任者 ${count} 人`;
+    html += `<td class="shift-total-cell${zero ? " is-zero" : ""}" title="${escapeHtml(title)}">${count}</td>`;
   }
   html += "<td class='shift-off-col'></td></tr></tfoot></table>";
 

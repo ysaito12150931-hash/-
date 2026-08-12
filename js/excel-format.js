@@ -350,13 +350,14 @@ function applyTeamColumnMerge(ws, rStart, rEnd, label) {
  * @param {{ id?: string, name: string, teamId?: string|null, subGroupId?: string|null, isSupervisor?: boolean, cells?: string[] }[]} workers
  * @param {{ id: string, name: string }[]} teams
  * @param {{ id: string, name: string, teamId: string }[]} [subGroups]
- * @param {{ variant?: 'template'|'shift', getConferenceHeaderLabel?: (day:number)=>string, getConferenceStyle?: (worker:object, day:number)=>object|null, getFooterLabel?: (day:number)=>string, getGroupTotalOutOfRange?: (section:object, day:number, total:number)=>boolean, getTeamTotalOutOfRange?: (team:object, day:number, total:number)=>boolean }} [options]
+ * @param {{ variant?: 'template'|'shift', getConferenceHeaderLabel?: (day:number)=>string, getConferenceStyle?: (worker:object, day:number)=>object|null, getFooterLabel?: (day:number)=>string, getSupervisorCount?: (day:number)=>number, getGroupTotalOutOfRange?: (section:object, day:number, total:number)=>boolean, getTeamTotalOutOfRange?: (team:object, day:number, total:number)=>boolean }} [options]
  */
 export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams = [], subGroups = [], options = {}) {
   const variant = options.variant ?? "template";
   const getConferenceHeaderLabel = options.getConferenceHeaderLabel;
   const getConferenceStyle = options.getConferenceStyle;
   const getFooterLabel = options.getFooterLabel;
+  const getSupervisorCount = options.getSupervisorCount;
   const getGroupTotalOutOfRange = options.getGroupTotalOutOfRange;
   const getTeamTotalOutOfRange = options.getTeamTotalOutOfRange;
   const weekends = getWeekendDaySet(year, month, days);
@@ -450,13 +451,18 @@ export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams 
   });
 
   let footerRow = null;
-  if (variant === "shift" && getFooterLabel) {
+  if (variant === "shift" && (getSupervisorCount || getFooterLabel)) {
     footerRow = r;
     setStyledCell(ws, r, COL_TEAM, "", STYLES.footerLabel);
-    setStyledCell(ws, r, COL_NAME, "責任者不在", STYLES.footerLabel);
+    setStyledCell(ws, r, COL_NAME, getSupervisorCount ? "責任者" : "責任者不在", STYLES.footerLabel);
     for (let d = 1; d <= days; d++) {
-      const label = getFooterLabel(d) || "";
-      setStyledCell(ws, r, dayColumn(d), label, label ? STYLES.footerCellAbsent : STYLES.footerCell);
+      if (getSupervisorCount) {
+        const count = Number(getSupervisorCount(d)) || 0;
+        setStyledCell(ws, r, dayColumn(d), count, count === 0 ? STYLES.footerCellDeviation : STYLES.footerCell);
+      } else {
+        const label = getFooterLabel(d) || "";
+        setStyledCell(ws, r, dayColumn(d), label, label ? STYLES.footerCellAbsent : STYLES.footerCell);
+      }
     }
     setStyledCell(ws, r, offDaysColumn(days), "", STYLES.footerCell);
     r++;

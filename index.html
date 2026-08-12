@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>シフト作成アプリ</title>
-  <link rel="stylesheet" href="css/app.css?v=1.5.14" />
+  <link rel="stylesheet" href="css/app.css?v=1.5.15" />
   <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 </head>
 <body>
@@ -193,7 +193,7 @@
       <h2>人数制約</h2>
       <fieldset class="card">
         <legend>全体責任者（1日あたり）</legend>
-        <p class="hint">可能な限り全体責任者を下限人数配置します。希望休の重複などで下限を満たせない日はシフトを作成し、その列の一番下に「責任者不在」と表示します。グループごとの責任者人数は「グループ」タブで設定します。全体責任者とグループ責任者は重複して構いません。</p>
+        <p class="hint">可能な限り全体責任者を下限人数配置します。希望休の重複などで下限を満たせない日はシフトを作成し、表の一番下にその日の責任者人数を表示します。0人の日は紫色です。グループごとの責任者人数は「グループ」タブで設定します。全体責任者とグループ責任者は重複して構いません。</p>
         <div class="team-stats-bar supervisor-stats-bar" id="supervisor-stats-constraints" aria-live="polite">
           <span class="stat stat-total">全体責任者登録 <strong id="supervisor-registered-count-constraints">0</strong> 名</span>
           <span class="stat">1日あたり上限 <strong id="supervisor-daily-max-display">2</strong> 名</span>
@@ -213,7 +213,7 @@
       <p class="hint">
         テンプレートは1行目に日付、2行目に曜日（土日は赤背景）です。A列にグループ名、B列に勤務者名、グループごとにまとめて並びます（アプリの登録順）。各グループの先頭行にも日付（1〜31）と「日数」を表示します。日付行とグループ・勤務者列はスクロール時に固定されます。<br />
         同一メイングループ内のサブグループの境目も空行で区切ります。チームの境目は黒（50%相当）の空行です。<br />
-        <strong>休み希望:</strong> 「休」「×」「off」など　／　<strong>出勤希望:</strong> 「出勤」「出」「○」など<br />
+        <strong>休み希望:</strong> 「休」「〇」「×」「off」など　／　<strong>出勤希望:</strong> 「出勤」「出」「１」など<br />
         <strong>半休:</strong> 「午前休」「前休」／「午後休」「後休」（休み日数は0.5日）<br />
         <strong>月間休み日数:</strong> 各勤務者行の右端列（「勤務者」タブで設定した値がテンプレートに出力されます）。アップロード時にこの列を読み取り、シフト生成の目標休み日数として使用します。
       </p>
@@ -265,6 +265,6 @@
     <p>データはこのブラウザのローカルストレージに保存されます。</p>
   </footer>
 
-  <script type="module" src="js/app.js?v=1.5.14"></script>
+  <script type="module" src="js/app.js?v=1.5.15"></script>
 </body>
 </html>
