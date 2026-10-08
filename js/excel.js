@@ -1,10 +1,10 @@
 import { getDaysInMonth } from "./store.js";
 import {
   fillCalendarTemplateSheet,
-  detectCalendarDataStartRow,
-  detectNameColumn,
-  detectOffDaysColumn,
+  detectSheetGeometry,
   isGroupSubHeaderRow,
+  isSkippedCalendarName,
+  readDayNumber,
 } from "./excel-format.js";
 import {
   normalizeConferenceDays,
@@ -73,25 +73,23 @@ export function parsePreferenceSheet(workbook, workerNames, year, month) {
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
   if (!rows.length) return { preferences: {}, monthlyOffDaysByName: {}, warnings: ["シートが空です"] };
 
-  const header = rows[0];
-  const dataStartRow = detectCalendarDataStartRow(rows);
-  const nameCol = detectNameColumn(header);
-  const offDaysCol = detectOffDaysColumn(header);
+  const geometry = detectSheetGeometry(rows);
+  const { nameCol, dateRow, offDaysCol, dataStartRow } = geometry;
+  const header = rows[dateRow] || [];
   const dayColEnd = offDaysCol != null ? offDaysCol : header.length;
   const dayCols = [];
   const daysInMonth = getDaysInMonth(year, month);
 
-  for (let c = nameCol + 1; c < dayColEnd; c++) {
-    const day = parseDayHeader(header[c], c, year, month);
-    if (day >= 1 && day <= daysInMonth) {
-      dayCols.push({ col: c, day });
-    }
+  for (let c = 0; c < dayColEnd; c++) {
+    if (c === nameCol) continue;
+    const day = readDayNumber(header[c]);
+    if (day != null && day >= 1 && day <= daysInMonth) dayCols.push({ col: c, day });
   }
 
   const warnings = [];
   if (!dayCols.length) {
     warnings.push(
-      "日付列を認識できませんでした。1行目の勤務者列の右側に日（1〜31）を入力してください。"
+      "日付列を認識できませんでした。「日　付」行の右側に日（1〜31）を入力してください。"
     );
   }
 
@@ -102,8 +100,9 @@ export function parsePreferenceSheet(workbook, workerNames, year, month) {
     const row = rows[r];
     const excelName = String(row[nameCol] ?? "").trim();
     if (!excelName) continue;
-    if (isGroupSubHeaderRow(row, nameCol)) continue;
-    if (excelName === "チーム" || excelName === "備考" || excelName.startsWith("出勤合計") || excelName.includes("未所属") || excelName.includes("責任者")) continue;
+    if (isSkippedCalendarName(excelName)) continue;
+    const firstDayCol = dayCols.find((d) => d.day === 1)?.col;
+    if (isGroupSubHeaderRow(row, nameCol, firstDayCol)) continue;
     const name = resolveWorkerName(excelName, workerNames);
     if (!name) {
       warnings.push(`未登録の勤務者: ${excelName}`);
@@ -133,27 +132,6 @@ function parseMonthlyOffDaysCell(value) {
   if (value == null || value === "") return null;
   const n = parseFloat(String(value).trim());
   return Number.isNaN(n) ? null : Math.max(0, n);
-}
-
-function parseDayHeader(cell, colIndex, year, month) {
-  if (cell == null || cell === "") return colIndex;
-  if (typeof cell === "number" && cell >= 1 && cell <= 31) return Math.floor(cell);
-
-  const s = String(cell).trim();
-  const num = parseInt(s, 10);
-  if (!Number.isNaN(num) && num >= 1 && num <= 31) return num;
-
-  const m = s.match(/(\d{1,2})\s*日?/);
-  if (m) return parseInt(m[1], 10);
-
-  if (cell instanceof Date) {
-    return cell.getDate();
-  }
-
-  const excelDate = XLSX.SSF?.parse_date_code?.(cell);
-  if (excelDate?.d) return excelDate.d;
-
-  return colIndex;
 }
 
 export function buildTemplateWorkbook(state) {
@@ -256,9 +234,9 @@ export function exportShiftWorkbook(result, state) {
 
 function formatCellExport(cell, useShiftTypes, isConference = false) {
   if (!cell || cell.type === "off") return "休";
-  if (cell.type === "half-off") return cell.half === "am" ? "午前休" : "午後休";
+  if (cell.type === "half-off") return cell.half === "am" ? "AM" : "PM";
   if (useShiftTypes && cell.shiftType) return isConference ? `${cell.shiftType}会` : cell.shiftType;
-  return isConference ? "１会" : "１";
+  return isConference ? "1会" : "1";
 }
 
 export function downloadWorkbook(wb, filename) {

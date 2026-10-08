@@ -7,7 +7,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>シフト作成アプリ</title>
-  <link rel="stylesheet" href="css/app.css?v=1.5.16" />
+  <link rel="stylesheet" href="css/app.css?v=1.5.17" />
   <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 </head>
 <body>
@@ -211,10 +211,9 @@
     <section id="panel-excel" class="panel">
       <h2>出勤・休み希望（Excel）</h2>
       <p class="hint">
-        テンプレートは1行目に日付、2行目に曜日（土日は赤背景）です。A列にグループ名、B列に勤務者名、グループごとにまとめて並びます（アプリの登録順）。各グループの先頭行にも日付（1〜31）と「日数」を表示します。日付行とグループ・勤務者列はスクロール時に固定されます。<br />
-        同一メイングループ内のサブグループの境目も空行で区切ります。チームの境目は黒（50%相当）の空行です。<br />
-        <strong>休み希望:</strong> 「休」「〇」「×」「off」など　／　<strong>出勤希望:</strong> 「出勤」「出」「１」など<br />
-        <strong>半休:</strong> 「午前休」「前休」／「午後休」「後休」（休み日数は0.5日）<br />
+        テンプレートは勤務表（氏名・日付・グループ色・合計行）に近い並びです。上段に年と月、「勤務調整」、各グループの先頭に「日　付」と「氏　名」（土日は赤字）があります。A列は責任者の★、B列が氏名、D列以降が1日〜月末です。グループごとに色を分け、末尾に「合計」行があります。日付と氏名の列はスクロール時に固定されます。<br />
+        <strong>休み希望:</strong> 「休」「〇」「×」「off」など　／　<strong>出勤希望:</strong> 「1」「出勤」「出」など<br />
+        <strong>半休:</strong> 「AM」「午前休」／「PM」「午後休」（休み日数は0.5日）<br />
         <strong>月間休み日数:</strong> 各勤務者行の右端列（「勤務者」タブで設定した値がテンプレートに出力されます）。アップロード時にこの列を読み取り、シフト生成の目標休み日数として使用します。
       </p>
       <div class="actions">
@@ -265,6 +264,6 @@
     <p>データはこのブラウザのローカルストレージに保存されます。</p>
   </footer>
 
-  <script type="module" src="js/app.js?v=1.5.16"></script>
+  <script type="module" src="js/app.js?v=1.5.17"></script>
 </body>
 </html>

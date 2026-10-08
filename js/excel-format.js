@@ -220,25 +220,113 @@ export function getWeekdayLabel(year, month, day) {
   return DOW_LABELS[new Date(year, month - 1, day).getDay()];
 }
 
-const COL_TEAM = 0;
+/** A=印, B=氏名, C=区分, D以降=日付（2026勤務.xlsx の並び） */
+const COL_MARK = 0;
 const COL_NAME = 1;
+const COL_LABEL = 2;
+const DAY_START = 3;
 export const OFF_DAYS_HEADER = "月間休み日数";
 
+const GROUP_PALETTE = ["CCFF33", "CCECFF", "CCFFCC", "FFFFCC", "FFCCFF", "FDE9D9"];
+const GRID_FONT = "ＭＳ ゴシック";
+
+const gridBorder = {
+  top: { style: "thin", color: { rgb: "808080" } },
+  bottom: { style: "thin", color: { rgb: "808080" } },
+  left: { style: "thin", color: { rgb: "808080" } },
+  right: { style: "thin", color: { rgb: "808080" } },
+};
+
 function dayColumn(day) {
-  return COL_NAME + day;
+  return DAY_START + day - 1;
 }
 
 function offDaysColumn(days) {
-  return dayColumn(days) + 1;
+  return DAY_START + days;
 }
 
 function lastColumnIndex(days) {
   return offDaysColumn(days);
 }
 
-function fillSpacerRow(ws, r, days, style) {
-  for (let c = COL_TEAM; c <= lastColumnIndex(days); c++) {
-    setStyledCell(ws, r, c, "", style);
+function gridFont(rgb, bold = false, sz = 10) {
+  return { name: GRID_FONT, sz, bold, color: { rgb } };
+}
+
+function gridStyle(fillRgb, fontRgb = "000000", bold = false, horizontal = "center", sz = 10) {
+  return {
+    font: gridFont(fontRgb, bold, sz),
+    fill: fill(fillRgb),
+    alignment: { horizontal, vertical: "center", wrapText: false },
+    border: gridBorder,
+  };
+}
+
+function titleStyle(sz = 14) {
+  return {
+    font: gridFont("000000", true, sz),
+    alignment: { horizontal: "center", vertical: "center" },
+  };
+}
+
+export function compactLabel(value) {
+  return String(value ?? "")
+    .replace(/[\s\u3000]/g, "")
+    .trim();
+}
+
+const SKIP_CALENDAR_NAMES = new Set([
+  "チーム",
+  "備考",
+  "出勤合計",
+  "出勤合計（メイン）",
+  "責任者",
+  "責任者不在",
+  "合計",
+  "総合計",
+  "リーダー",
+  "朝礼",
+  "日付",
+  "氏名",
+  "勤務調整",
+  "グループ",
+  "勤務者",
+]);
+
+export function isSkippedCalendarName(name) {
+  const n = compactLabel(name);
+  if (!n) return false;
+  if (SKIP_CALENDAR_NAMES.has(n)) return true;
+  if (n.startsWith("出勤合計") || n.startsWith("専従")) return true;
+  if (n.includes("未所属") || n.includes("責任者")) return true;
+  return false;
+}
+
+/** 日付ヘッダーとして読める 1〜31。読めなければ null */
+export function readDayNumber(cell) {
+  if (typeof cell === "number" && cell >= 1 && cell <= 31) return Math.floor(cell);
+  if (cell instanceof Date && !Number.isNaN(cell.getTime())) return cell.getDate();
+  const s = String(cell ?? "").trim();
+  if (!s) return null;
+  if (/^\d{1,2}$/.test(s)) {
+    const n = parseInt(s, 10);
+    if (n >= 1 && n <= 31) return n;
+  }
+  const m = s.match(/^(\d{1,2})\s*日$/);
+  if (m) {
+    const n = parseInt(m[1], 10);
+    if (n >= 1 && n <= 31) return n;
+  }
+  return null;
+}
+
+function blankRow(ws, r, days) {
+  for (let c = COL_MARK; c <= lastColumnIndex(days); c++) {
+    setStyledCell(ws, r, c, "", {
+      font: gridFont("000000", false, 9),
+      fill: fill("FFFFFF"),
+      border: gridBorder,
+    });
   }
 }
 
@@ -248,21 +336,6 @@ function makeStyle(fontRgb, fillRgb, bold = false) {
     fill: fill(fillRgb),
     alignment: { horizontal: "center", vertical: "center" },
     border: baseBorder,
-  };
-}
-
-function resolveWeekendStyles(variant) {
-  if (variant === "shift") {
-    return {
-      headerDay: STYLES.headerDayWeekendShift,
-      headerDow: STYLES.headerDowWeekendShift,
-      workerCell: STYLES.workerCellWeekendShift,
-    };
-  }
-  return {
-    headerDay: STYLES.headerDayWeekend,
-    headerDow: STYLES.headerDowWeekend,
-    workerCell: STYLES.workerCellWeekend,
   };
 }
 
@@ -285,72 +358,106 @@ function countAttendingFromWorkerCells(members, day) {
   return members.filter((w) => normalizeCellValue(w.cells?.[day - 1] ?? "").attending).length;
 }
 
-function writeWorkerRow(ws, r, days, worker, weekends, variant, getConferenceStyle) {
-  setStyledCell(ws, r, COL_TEAM, "", STYLES.workerName);
-  setStyledCell(ws, r, COL_NAME, worker.name, STYLES.workerName);
-  const weekendStyles = resolveWeekendStyles(variant);
-  for (let d = 1; d <= days; d++) {
-    const cell = normalizeCellValue(worker.cells?.[d - 1] ?? "");
-    let style = weekends.has(d) ? weekendStyles.workerCell : STYLES.workerCell;
-    const confStyle = getConferenceStyle?.(worker, d);
-    if (confStyle) {
-      style = makeStyle(confStyle.color.replace("#", ""), confStyle.bg.replace("#", ""), true);
-    } else if (cell.preferredOff && variant === "shift") {
-      style = STYLES.workerCellPreferredOff;
-    } else if (cell.off && variant === "shift") {
-      style = STYLES.workerCellAutoOff;
-    } else if (cell.conference) {
-      style = weekends.has(d) && variant === "shift"
-        ? STYLES.workerCellConferenceWeekendShift
-        : STYLES.workerCellConference;
-    }
-    setStyledCell(ws, r, dayColumn(d), cell.text, style);
-  }
-  const offDays = worker.monthlyOffDays;
-  setStyledCell(
-    ws,
-    r,
-    offDaysColumn(days),
-    offDays == null || offDays === "" ? "" : offDays,
-    STYLES.workerCell
-  );
+function countWorkerAttendingDays(worker) {
+  return (worker.cells || []).filter((cell) => normalizeCellValue(cell).attending).length;
 }
 
-function writeGroupSubHeaderRow(ws, r, days, weekends, variant) {
-  const weekendStyles = resolveWeekendStyles(variant);
-  setStyledCell(ws, r, COL_NAME, "", STYLES.headerDow);
+function dayHeaderStyle(weekend) {
+  return gridStyle("FFFFFF", weekend ? "FF0000" : "000000", true, "center", 9);
+}
+
+function nameHeaderStyle() {
+  return gridStyle("FFFFFF", "000000", true, "center", 10);
+}
+
+function writeWorkerRow(ws, r, days, worker, variant, getConferenceStyle, groupRgb) {
+  const rowStyle = gridStyle(groupRgb, "000000", false, "center", 10);
+  const nameStyle = gridStyle(groupRgb, "000000", true, "left", 10);
+  const mark = worker.isSupervisor || worker.isGroupSupervisor ? "★" : "";
+  setStyledCell(ws, r, COL_MARK, mark, gridStyle(groupRgb, "FF0000", true, "center", 10));
+  setStyledCell(ws, r, COL_NAME, worker.name, nameStyle);
+  setStyledCell(ws, r, COL_LABEL, "", rowStyle);
   for (let d = 1; d <= days; d++) {
-    const style = weekends.has(d) ? weekendStyles.headerDay : STYLES.headerDay;
-    setStyledCell(ws, r, dayColumn(d), d, style);
+    const cell = normalizeCellValue(worker.cells?.[d - 1] ?? "");
+    let style = variant === "template" ? rowStyle : gridStyle("FFFFFF");
+    const confStyle = getConferenceStyle?.(worker, d);
+    if (variant === "shift" && confStyle) {
+      style = makeStyle(confStyle.color.replace("#", ""), confStyle.bg.replace("#", ""), true);
+    } else if (variant === "shift" && cell.preferredOff) {
+      style = STYLES.workerCellPreferredOff;
+    } else if (variant === "shift" && cell.off) {
+      style = STYLES.workerCellAutoOff;
+    } else if (variant === "shift" && cell.conference) {
+      style = STYLES.workerCellConference;
+    }
+    setStyledCell(ws, r, dayColumn(d), variant === "template" ? "" : cell.text, style);
   }
-  setStyledCell(ws, r, offDaysColumn(days), "日数", STYLES.headerDow);
+  const offDays = worker.monthlyOffDays;
+  const rightValue = variant === "shift" ? countWorkerAttendingDays(worker) : offDays == null || offDays === "" ? "" : offDays;
+  setStyledCell(ws, r, offDaysColumn(days), rightValue, rowStyle);
+}
+
+function writeDateHeaderRow(ws, r, days, weekends, groupLabel, groupRgb, rightHeader, getConferenceHeaderLabel) {
+  const head = gridStyle(groupRgb, "000000", true, "center", 9);
+  setStyledCell(ws, r, COL_MARK, "", head);
+  setStyledCell(ws, r, COL_NAME, "日　付", head);
+  setStyledCell(ws, r, COL_LABEL, groupLabel, gridStyle(groupRgb, "000000", true, "left", 8));
+  for (let d = 1; d <= days; d++) {
+    const confLabel = getConferenceHeaderLabel?.(d);
+    const value = confLabel ? `${d}会` : d;
+    setStyledCell(ws, r, dayColumn(d), value, dayHeaderStyle(weekends.has(d)));
+  }
+  setStyledCell(ws, r, offDaysColumn(days), rightHeader, nameHeaderStyle());
+}
+
+function writeNameHeaderRow(ws, r, year, month, days, weekends) {
+  setStyledCell(ws, r, COL_MARK, "", nameHeaderStyle());
+  setStyledCell(ws, r, COL_NAME, "氏　名", nameHeaderStyle());
+  setStyledCell(ws, r, COL_LABEL, "", nameHeaderStyle());
+  for (let d = 1; d <= days; d++) {
+    setStyledCell(ws, r, dayColumn(d), getWeekdayLabel(year, month, d), dayHeaderStyle(weekends.has(d)));
+  }
+  setStyledCell(ws, r, offDaysColumn(days), "日数", nameHeaderStyle());
+}
+
+function writeTotalRow(ws, r, days, label, members, groupRgb, variant, deviantAt) {
+  const style = gridStyle(groupRgb, "000000", true, "center", 10);
+  const nameStyle = gridStyle(groupRgb, "000000", true, "left", 10);
+  setStyledCell(ws, r, COL_MARK, members.length, style);
+  setStyledCell(ws, r, COL_NAME, label, nameStyle);
+  setStyledCell(ws, r, COL_LABEL, "", style);
+  for (let d = 1; d <= days; d++) {
+    if (variant !== "shift") {
+      setStyledCell(ws, r, dayColumn(d), "", style);
+      continue;
+    }
+    const total = countAttendingFromWorkerCells(members, d);
+    const deviant = Boolean(deviantAt?.(d, total));
+    setStyledCell(ws, r, dayColumn(d), total, deviant ? STYLES.footerCellDeviation : style);
+  }
+  const right =
+    variant === "shift" ? members.reduce((sum, w) => sum + countWorkerAttendingDays(w), 0) : "";
+  setStyledCell(ws, r, offDaysColumn(days), right, style);
 }
 
 function getGroupLabel(section) {
   if (section.team?.name && section.subGroup?.name) {
     return `${section.team.name} / ${section.subGroup.name}`;
   }
-  return section.label;
-}
-
-function applyTeamColumnMerge(ws, rStart, rEnd, label) {
-  setStyledCell(ws, rStart, COL_TEAM, label, STYLES.teamLabel);
-  if (rEnd > rStart) {
-    if (!ws["!merges"]) ws["!merges"] = [];
-    ws["!merges"].push({ s: { r: rStart, c: COL_TEAM }, e: { r: rEnd, c: COL_TEAM } });
-  }
+  return section.label || "";
 }
 
 /**
- * 2行ヘッダー（日付・曜日）＋チームごとにまとめた勤務者行
+ * 2026勤務.xlsx に近い表。
+ * 1行目: 年・月 / 2行目: 勤務調整 / 各グループ: 日　付・氏　名（土日は赤字）・勤務者・合計
  * @param {WorkSheet} ws
  * @param {number} year
  * @param {number} month
  * @param {number} days
- * @param {{ id?: string, name: string, teamId?: string|null, subGroupId?: string|null, isSupervisor?: boolean, cells?: string[] }[]} workers
+ * @param {{ id?: string, name: string, teamId?: string|null, subGroupId?: string|null, isSupervisor?: boolean, isGroupSupervisor?: boolean, monthlyOffDays?: number, cells?: string[] }[]} workers
  * @param {{ id: string, name: string }[]} teams
  * @param {{ id: string, name: string, teamId: string }[]} [subGroups]
- * @param {{ variant?: 'template'|'shift', getConferenceHeaderLabel?: (day:number)=>string, getConferenceStyle?: (worker:object, day:number)=>object|null, getFooterLabel?: (day:number)=>string, getSupervisorCount?: (day:number)=>number, getGroupTotalOutOfRange?: (section:object, day:number, total:number)=>boolean, getTeamTotalOutOfRange?: (team:object, day:number, total:number)=>boolean }} [options]
+ * @param {{ variant?: 'template'|'shift', getConferenceHeaderLabel?: (day:number)=>boolean, getConferenceStyle?: (worker:object, day:number)=>object|null, getFooterLabel?: (day:number)=>string, getSupervisorCount?: (day:number)=>number, getGroupTotalOutOfRange?: (section:object, day:number, total:number)=>boolean, getTeamTotalOutOfRange?: (team:object, day:number, total:number)=>boolean }} [options]
  */
 export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams = [], subGroups = [], options = {}) {
   const variant = options.variant ?? "template";
@@ -361,154 +468,177 @@ export function fillCalendarTemplateSheet(ws, year, month, days, workers, teams 
   const getGroupTotalOutOfRange = options.getGroupTotalOutOfRange;
   const getTeamTotalOutOfRange = options.getTeamTotalOutOfRange;
   const weekends = getWeekendDaySet(year, month, days);
-  const weekendStyles = resolveWeekendStyles(variant);
   const sections = getWorkerSections(workers, teams, subGroups);
   const sectionGroups = groupWorkerSectionsByTeam(sections);
+  const rightHeader = variant === "shift" ? "出勤" : OFF_DAYS_HEADER;
 
-  setStyledCell(ws, 0, COL_TEAM, "グループ", STYLES.headerName);
-  setStyledCell(ws, 0, COL_NAME, "勤務者", STYLES.headerName);
-  for (let d = 1; d <= days; d++) {
-    const style = weekends.has(d) ? weekendStyles.headerDay : STYLES.headerDay;
-    const confLabel = getConferenceHeaderLabel?.(d);
-    const value = confLabel ? `${d}会` : d;
-    setStyledCell(ws, 0, dayColumn(d), value, style);
-  }
-  setStyledCell(ws, 0, offDaysColumn(days), OFF_DAYS_HEADER, STYLES.headerName);
-
-  setStyledCell(ws, 1, COL_TEAM, "", STYLES.headerName);
-  setStyledCell(ws, 1, COL_NAME, "", STYLES.headerName);
-  for (let d = 1; d <= days; d++) {
-    const style = weekends.has(d) ? weekendStyles.headerDow : STYLES.headerDow;
-    const confLabel = getConferenceHeaderLabel?.(d);
-    const value = confLabel ? `${getWeekdayLabel(year, month, d)}会` : getWeekdayLabel(year, month, d);
-    setStyledCell(ws, 1, dayColumn(d), value, style);
-  }
-  setStyledCell(ws, 1, offDaysColumn(days), "日数", STYLES.headerDow);
+  setStyledCell(ws, 0, COL_NAME, year, titleStyle(16));
+  setStyledCell(ws, 0, COL_LABEL, "年", titleStyle(14));
+  setStyledCell(ws, 0, DAY_START, month, titleStyle(16));
+  setStyledCell(ws, 0, DAY_START + 1, "月", titleStyle(14));
+  setStyledCell(ws, 1, COL_NAME, "勤務調整", titleStyle(12));
 
   let r = 2;
+  let colorIndex = 0;
   ws["!merges"] = [];
 
-  sectionGroups.forEach((group, groupIndex) => {
-    group.sections.forEach((section, sectionIndex) => {
-      const groupStartRow = r;
+  const blocks = sections.length ? sections : [{ label: "", members: [], team: null, subGroup: null }];
 
-      writeGroupSubHeaderRow(ws, r, days, weekends, variant);
+  blocks.forEach((section, sectionIndex) => {
+    const groupRgb = GROUP_PALETTE[colorIndex % GROUP_PALETTE.length];
+    colorIndex += 1;
+    const groupLabel = getGroupLabel(section);
+
+    writeDateHeaderRow(ws, r, days, weekends, groupLabel, groupRgb, rightHeader, getConferenceHeaderLabel);
+    r++;
+    writeNameHeaderRow(ws, r, year, month, days, weekends);
+    r++;
+
+    section.members.forEach((worker) => {
+      writeWorkerRow(ws, r, days, worker, variant, getConferenceStyle, groupRgb);
       r++;
-
-      section.members.forEach((w, memberIndex) => {
-        writeWorkerRow(ws, r, days, w, weekends, variant, getConferenceStyle);
-        r++;
-
-        if (memberIndex < section.members.length - 1) {
-          fillSpacerRow(ws, r, days, STYLES.spacerWithinTeam);
-          r++;
-        }
-      });
-
-      const membersEndRow = r - 1;
-      applyTeamColumnMerge(ws, groupStartRow, membersEndRow, getGroupLabel(section));
-
-      const hasSubSections = group.sections.some((s) => s.subGroup);
-      if (variant === "shift" && (!group.team || hasSubSections)) {
-        setStyledCell(ws, r, COL_TEAM, "", STYLES.workerName);
-        setStyledCell(ws, r, COL_NAME, "出勤合計", STYLES.footerLabel);
-        for (let d = 1; d <= days; d++) {
-          const total = countAttendingFromWorkerCells(section.members, d);
-          const deviant = Boolean(getGroupTotalOutOfRange?.(section, d, total));
-          setStyledCell(ws, r, dayColumn(d), total, deviant ? STYLES.footerCellDeviation : STYLES.footerCell);
-        }
-        setStyledCell(ws, r, offDaysColumn(days), "", STYLES.footerCell);
-        r++;
-      }
-
-      const isLastSection = sectionIndex === group.sections.length - 1;
-      if (!isLastSection) {
-        fillSpacerRow(ws, r, days, STYLES.spacerTeamBoundary);
-        r++;
-      }
     });
 
-    if (variant === "shift" && group.team) {
-      const hasSubSections = group.sections.some((s) => s.subGroup);
+    writeTotalRow(ws, r, days, "合計", section.members, groupRgb, variant, (day, total) =>
+      getGroupTotalOutOfRange?.(section, day, total)
+    );
+    r++;
+
+    const group = sectionGroups.find((g) => g.sections.includes(section));
+    const isLastInTeam = group ? group.sections[group.sections.length - 1] === section : true;
+    if (variant === "shift" && group?.team && group.sections.length > 1 && isLastInTeam) {
       const teamMembers = workers.filter((w) => w.teamId === group.team.id);
-      const labelStyle = hasSubSections ? STYLES.teamTotalLabel : STYLES.footerLabel;
-      const cellStyle = hasSubSections ? STYLES.teamTotalCell : STYLES.footerCell;
-      setStyledCell(ws, r, COL_TEAM, hasSubSections ? group.team.name : "", labelStyle);
-      setStyledCell(ws, r, COL_NAME, hasSubSections ? "出勤合計（メイン）" : "出勤合計", labelStyle);
-      for (let d = 1; d <= days; d++) {
-        const total = countAttendingFromWorkerCells(teamMembers, d);
-        const deviant = Boolean(getTeamTotalOutOfRange?.(group.team, d, total));
-        setStyledCell(ws, r, dayColumn(d), total, deviant ? STYLES.footerCellDeviation : cellStyle);
-      }
-      setStyledCell(ws, r, offDaysColumn(days), "", cellStyle);
+      const teamRgb = "CCFFFF";
+      writeTotalRow(ws, r, days, "合計", teamMembers, teamRgb, variant, (day, total) =>
+        getTeamTotalOutOfRange?.(group.team, day, total)
+      );
+      setStyledCell(ws, r, COL_LABEL, group.team.name, gridStyle(teamRgb, "000000", true, "left", 8));
       r++;
     }
 
-    if (groupIndex < sectionGroups.length - 1) {
-      fillSpacerRow(ws, r, days, STYLES.spacerTeamBoundary);
+    if (sectionIndex < blocks.length - 1) {
+      blankRow(ws, r, days);
       r++;
     }
   });
 
-  let footerRow = null;
-  if (variant === "shift" && (getSupervisorCount || getFooterLabel)) {
-    footerRow = r;
-    setStyledCell(ws, r, COL_TEAM, "", STYLES.footerLabel);
-    setStyledCell(ws, r, COL_NAME, getSupervisorCount ? "責任者" : "責任者不在", STYLES.footerLabel);
-    for (let d = 1; d <= days; d++) {
-      if (getSupervisorCount) {
-        const count = Number(getSupervisorCount(d)) || 0;
-        setStyledCell(ws, r, dayColumn(d), count, count === 0 ? STYLES.footerCellDeviation : STYLES.footerCell);
-      } else {
-        const label = getFooterLabel(d) || "";
-        setStyledCell(ws, r, dayColumn(d), label, label ? STYLES.footerCellAbsent : STYLES.footerCell);
-      }
-    }
-    setStyledCell(ws, r, offDaysColumn(days), "", STYLES.footerCell);
+  if (variant === "shift") {
+    blankRow(ws, r, days);
     r++;
+    writeTotalRow(ws, r, days, "総合計", workers, "FFCCFF", "shift");
+    r++;
+
+    if (getSupervisorCount || getFooterLabel) {
+      const foot = gridStyle("FFCCFF", "000000", true, "center", 10);
+      setStyledCell(ws, r, COL_MARK, "", foot);
+      setStyledCell(ws, r, COL_NAME, getSupervisorCount ? "責任者" : "責任者不在", gridStyle("FFCCFF", "000000", true, "left", 10));
+      setStyledCell(ws, r, COL_LABEL, "", foot);
+      for (let d = 1; d <= days; d++) {
+        if (getSupervisorCount) {
+          const count = Number(getSupervisorCount(d)) || 0;
+          setStyledCell(ws, r, dayColumn(d), count, count === 0 ? STYLES.footerCellDeviation : foot);
+        } else {
+          const label = getFooterLabel(d) || "";
+          setStyledCell(ws, r, dayColumn(d), label, label ? STYLES.footerCellAbsent : foot);
+        }
+      }
+      setStyledCell(ws, r, offDaysColumn(days), "", foot);
+      r++;
+    }
   }
 
   ws["!ref"] = XLSX.utils.encode_range({
     s: { c: 0, r: 0 },
     e: { c: lastColumnIndex(days), r: Math.max(r - 1, 1) },
   });
-  ws["!cols"] = [{ wch: 12 }, { wch: 14 }, ...Array.from({ length: days }, () => ({ wch: 6 })), { wch: 10 }];
-  const rows = [{ hpt: 22 }, { hpt: 20 }];
-  if (footerRow != null) rows[footerRow] = { hpt: 36 };
-  ws["!rows"] = rows;
+  ws["!cols"] = [
+    { wch: 3 },
+    { wch: 14 },
+    { wch: 12 },
+    ...Array.from({ length: days }, () => ({ wch: 4.2 })),
+    { wch: 12 },
+  ];
+  ws["!rows"] = [{ hpt: 18 }, { hpt: 16 }];
   ws["!views"] = [
     {
       state: "frozen",
-      xSplit: 2,
-      ySplit: 2,
-      topLeftCell: "C3",
-      activeCell: "C3",
+      xSplit: 3,
+      ySplit: 4,
+      topLeftCell: "D5",
+      activeCell: "D5",
     },
   ];
 }
 
 export function detectCalendarDataStartRow(rows) {
-  if (rows.length < 2) return 1;
-  const row1 = rows[1] ?? [];
-  for (let c = 1; c < row1.length; c++) {
-    if (/^[月火水木金土日]$/u.test(String(row1[c] ?? "").trim())) return 2;
+  return detectSheetGeometry(rows).dataStartRow;
+}
+
+/**
+ * 氏名列・日付行・月間休み日数列・データ開始行。
+ * 旧形式（1行目が勤務者）と、日　付 / 氏　名 形式の両方を読む。
+ */
+export function detectSheetGeometry(rows) {
+  const limit = Math.min(rows.length, 30);
+  let nameCol = null;
+  let nameHeaderRow = -1;
+  for (let r = 0; r < limit; r++) {
+    const row = rows[r] || [];
+    for (let c = 0; c < row.length; c++) {
+      const h = compactLabel(row[c]);
+      if (nameHeaderRow < 0 && (h === "勤務者" || h === "氏名")) {
+        nameCol = c;
+        nameHeaderRow = r;
+      }
+    }
   }
-  return 1;
+  if (nameCol == null) {
+    nameCol = detectNameColumn(rows[0] || []);
+    nameHeaderRow = 0;
+  }
+
+  let dateRow = -1;
+  for (let r = 0; r < limit; r++) {
+    const row = rows[r] || [];
+    if (row.some((cell) => compactLabel(cell) === "日付")) {
+      dateRow = r;
+      break;
+    }
+  }
+  if (dateRow < 0) dateRow = nameHeaderRow >= 0 ? nameHeaderRow : 0;
+
+  let offDaysCol = null;
+  for (let r = 0; r < limit; r++) {
+    const found = detectOffDaysColumn(rows[r] || []);
+    if (found != null) {
+      offDaysCol = found;
+      break;
+    }
+  }
+
+  let dataStartRow = Math.max(nameHeaderRow, 0) + 1;
+  const maybeDow = rows[dataStartRow] || [];
+  const nameOnDow = compactLabel(maybeDow[nameCol]);
+  const dowCount = maybeDow.filter((cell) => /^[月火水木金土日]$/u.test(String(cell ?? "").trim())).length;
+  if (!nameOnDow && dowCount >= 3) dataStartRow += 1;
+
+  return { nameCol, nameHeaderRow, dateRow, offDaysCol, dataStartRow };
 }
 
 /** グループ先頭の日付サブヘッダー行（勤務者名が空で1日目が 1） */
-export function isGroupSubHeaderRow(row, nameCol) {
-  if (String(row[nameCol] ?? "").trim()) return false;
-  const day1 = row[nameCol + 1];
-  if (typeof day1 === "number" && day1 === 1) return true;
-  return String(day1 ?? "").trim() === "1";
+export function isGroupSubHeaderRow(row, nameCol, dayCol) {
+  const name = compactLabel(row[nameCol]);
+  if (name === "日付" || name === "氏名" || name === "勤務調整") return true;
+  if (name) return false;
+  const dayIndex = dayCol ?? nameCol + 1;
+  return readDayNumber(row[dayIndex]) === 1;
 }
 
 /** @param {unknown[]} header */
 export function detectOffDaysColumn(header) {
   for (let c = 0; c < header.length; c++) {
-    const h = String(header[c] ?? "").trim();
-    if (h === OFF_DAYS_HEADER || h.includes("月間休み")) return c;
+    const h = compactLabel(header[c]);
+    if (h === compactLabel(OFF_DAYS_HEADER) || h.includes("月間休み")) return c;
   }
   return null;
 }
@@ -516,10 +646,10 @@ export function detectOffDaysColumn(header) {
 /** @param {unknown[]} header */
 export function detectNameColumn(header) {
   for (let c = 0; c < header.length; c++) {
-    const h = String(header[c] ?? "").trim();
-    if (h === "勤務者" || h.includes("勤務者")) return c;
+    const h = compactLabel(header[c]);
+    if (h === "勤務者" || h === "氏名") return c;
   }
-  const a = String(header[0] ?? "").trim();
+  const a = compactLabel(header[0]);
   if (a === "チーム" || a.includes("チーム") || a === "グループ" || a.includes("グループ")) return 1;
   return 0;
 }
