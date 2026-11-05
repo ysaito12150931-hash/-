@@ -49,6 +49,7 @@ export function generateShift(state) {
 
   const locked = buildPreferenceLocks(workers, preferences, days);
   const { lockedOff, lockedWork, halfOff } = locked;
+  lockWorkBesideLongPreferredOff(workers, days, lockedOff, lockedWork, halfOff, messages);
 
   for (const w of workers) {
     const pref = getWorkerPrefMap(preferences, w.name) || {};
@@ -244,6 +245,38 @@ function buildPreferenceLocks(workers, preferences, days) {
     }
   }
   return { lockedOff, lockedWork, halfOff };
+}
+
+function lockWorkBesideLongPreferredOff(workers, days, lockedOff, lockedWork, halfOff, messages) {
+  for (const w of workers) {
+    const forced = [];
+    let d = 1;
+    while (d <= days) {
+      if (!lockedOff[w.id]?.[d]) {
+        d++;
+        continue;
+      }
+      let end = d;
+      while (end < days && lockedOff[w.id]?.[end + 1]) end++;
+      if (end - d + 1 >= 3) {
+        for (const boundary of [d - 1, end + 1]) {
+          if (boundary < 1 || boundary > days) continue;
+          if (lockedWork[w.id]?.[boundary]) continue;
+          if (lockedOff[w.id]?.[boundary]) continue;
+          if (halfOff[w.id]?.[boundary]) continue;
+          lockedWork[w.id][boundary] = true;
+          forced.push(boundary);
+        }
+      }
+      d = end + 1;
+    }
+    if (forced.length) {
+      const list = forced.map((day) => `${day}日`).join("・");
+      messages.push(
+        `${w.name}: 希望休が3日以上連続しているため、${list}を出勤に設定し、連休が延びないようにしました。`
+      );
+    }
+  }
 }
 
 function countPreferenceOffDays(pref, days) {
@@ -501,7 +534,11 @@ function seedWorkerOffDays(grid, w, days, targetOff, lockedOff, lockedWork, half
       const step = shuffled.length / count;
       for (let i = 0; i < count; i++) {
         const d = shuffled[Math.min(shuffled.length - 1, Math.floor(i * step + step / 2))];
+        if (!grid[w.id][d]) continue;
         grid[w.id][d] = false;
+        if (violatesConsecutiveAutoOff(grid[w.id], days, lockedOff, w.id)) {
+          grid[w.id][d] = true;
+        }
       }
     }
   }
@@ -515,6 +552,10 @@ function seedWorkerOffDays(grid, w, days, targetOff, lockedOff, lockedWork, half
     for (const d of daysAroundMid(streak.start, streak.end)) {
       if (!canAssignOffOnDay(w, d, lockedOff, lockedWork, halfOff) || !grid[w.id][d]) continue;
       grid[w.id][d] = false;
+      if (violatesConsecutiveAutoOff(grid[w.id], days, lockedOff, w.id)) {
+        grid[w.id][d] = true;
+        continue;
+      }
       placed = true;
       break;
     }
@@ -557,7 +598,11 @@ function spreadAdditionalOffDays(grid, w, days, neededOff, lockedOff, lockedWork
   const step = shuffled.length / count;
   for (let i = 0; i < count; i++) {
     const d = shuffled[Math.min(shuffled.length - 1, Math.floor(i * step + step / 2))];
+    if (!grid[w.id][d]) continue;
     grid[w.id][d] = false;
+    if (violatesConsecutiveAutoOff(grid[w.id], days, lockedOff, w.id)) {
+      grid[w.id][d] = true;
+    }
   }
 
   let guard = 0;
@@ -569,6 +614,10 @@ function spreadAdditionalOffDays(grid, w, days, neededOff, lockedOff, lockedWork
     for (const d of daysAroundMid(streak.start, streak.end)) {
       if (!canAssignOffOnDay(w, d, lockedOff, lockedWork, halfOff) || !grid[w.id][d]) continue;
       grid[w.id][d] = false;
+      if (violatesConsecutiveAutoOff(grid[w.id], days, lockedOff, w.id)) {
+        grid[w.id][d] = true;
+        continue;
+      }
       placed = true;
       break;
     }
@@ -869,6 +918,29 @@ function tryBuildSchedule(ctx) {
     requireSupervisor,
     rng
   );
+
+  let releasedMixedOff = false;
+  for (const w of workers) {
+    if (releaseAutoOffsTouchingPreferredOff(grid, w, days, lockedOff, lockedWork, halfOff)) {
+      releasedMixedOff = true;
+    }
+  }
+  if (releasedMixedOff) {
+    balanceOffTargets(
+      grid,
+      workers,
+      days,
+      targets,
+      lockedOff,
+      lockedWork,
+      halfOff,
+      maxConsecutiveWork,
+      groupCtx,
+      requireSupervisor,
+      rng,
+      days * workers.length * 8
+    );
+  }
 
   for (const w of workers) {
     if (!offDaysMatch(countEffectiveOffDays(grid, w.id, days, halfOff), targets[w.id])) return null;
@@ -1785,20 +1857,72 @@ function validateDay(grid, workers, day, groupCtx, requireSupervisor) {
 }
 
 function violatesConsecutiveAutoOff(row, days, lockedOff, workerId, maxAutoOff = MAX_AUTO_OFF_CONSECUTIVE) {
-  let autoStreak = 0;
-  for (let d = 1; d <= days; d++) {
-    if (!row[d]) {
-      if (lockedOff[workerId]?.[d]) {
-        autoStreak = 0;
-      } else {
-        autoStreak++;
-        if (autoStreak > maxAutoOff) return true;
-      }
-    } else {
-      autoStreak = 0;
+  let start = 1;
+  while (start <= days) {
+    if (row[start]) {
+      start++;
+      continue;
     }
+    let end = start;
+    while (end < days && !row[end + 1]) end++;
+    let lockedCount = 0;
+    let autoCount = 0;
+    for (let d = start; d <= end; d++) {
+      if (lockedOff[workerId]?.[d]) lockedCount++;
+      else autoCount++;
+    }
+    const len = end - start + 1;
+    if (lockedCount > 0 && autoCount > 0 && len >= 3) return true;
+    if (lockedCount === 0 && autoCount > maxAutoOff) return true;
+    start = end + 1;
   }
   return false;
+}
+
+function findMixedPreferredOffStreak(row, days, lockedOff, workerId) {
+  let start = 1;
+  while (start <= days) {
+    if (row[start]) {
+      start++;
+      continue;
+    }
+    let end = start;
+    while (end < days && !row[end + 1]) end++;
+    let hasLocked = false;
+    let hasAuto = false;
+    for (let d = start; d <= end; d++) {
+      if (lockedOff[workerId]?.[d]) hasLocked = true;
+      else hasAuto = true;
+    }
+    if (hasLocked && hasAuto && end - start + 1 >= 3) return { start, end };
+    start = end + 1;
+  }
+  return null;
+}
+
+function releaseAutoOffsTouchingPreferredOff(grid, w, days, lockedOff, lockedWork, halfOff) {
+  const row = grid[w.id];
+  let changed = false;
+  for (let guard = 0; guard < days; guard++) {
+    const streak = findMixedPreferredOffStreak(row, days, lockedOff, w.id);
+    if (!streak) break;
+    const mid = (streak.start + streak.end) / 2;
+    let best = -1;
+    let bestDist = Infinity;
+    for (let d = streak.start; d <= streak.end; d++) {
+      if (row[d]) continue;
+      if (lockedOff[w.id]?.[d] || lockedWork[w.id]?.[d] || halfOff[w.id]?.[d]) continue;
+      const dist = Math.abs(d - mid);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = d;
+      }
+    }
+    if (best < 0) break;
+    row[best] = true;
+    changed = true;
+  }
+  return changed;
 }
 
 function violatesWorkerStreaks(row, days, lockedOff, workerId, maxConsecutiveWork) {
